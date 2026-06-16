@@ -1,0 +1,37 @@
+{
+  "title": "TerminalClaw",
+  "projects": [
+    {
+      "id": "example-app",
+      "name": "Example App (web + api)",
+      "dir": "/opt/example-app",
+      "domains": ["app.example.com", "api.example.com"],
+      "containers": ["example_app_frontend", "example_app_backend", "example_app_db"],
+      "memory": ["example-app-context.md"]
+    },
+    {
+      "id": "example-landing",
+      "name": "Example Landing",
+      "dir": "/opt/example-landing",
+      "domains": ["example.com"],
+      "containers": ["example_landing"],
+      "memory": []
+    },
+    {
+      "id": "terminalclaw",
+      "name": "TerminalClaw (this dashboard)",
+      "dir": "/opt/terminalclaw",
+      "domains": ["hub.example.com"],
+      "containers": [],
+      "memory": []
+    },
+    {
+      "id": "server",
+      "name": "Server / Infra",
+      "dir": "/root",
+      "domains": [],
+      "containers": [],
+      "memory": []
+    }
+  ]
+}

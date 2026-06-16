@@ -1,0 +1,36 @@
+# Hub block from /etc/caddy/Caddyfile.
+#
+# Caddy listens on a localhost-only HTTP port; the Cloudflare Tunnel
+# (cloudflared) forwards public HTTPS traffic to it. Public TLS terminates at
+# the Cloudflare edge, so Caddy speaks plain HTTP here.
+#
+# Auth is two independent, cookie-based layers (HTTP Basic was removed because
+# mobile browsers won't re-send it into the terminal iframe):
+#   Layer 1 (edge)  : Cloudflare Access / Zero Trust  -> CF_Authorization cookie
+#   Layer 2 (origin): the dashboard's signed-cookie login, enforced below via
+#                     forward_auth -> /gate/check (served by server.py).
+
+http://hub.example.com:8088 {
+	bind 127.0.0.1
+
+	route {
+		# Layer-2 login/check/logout endpoints bypass the cookie check itself.
+		handle /gate/* {
+			reverse_proxy 127.0.0.1:7682
+		}
+		# Everything else requires a valid session cookie. forward_auth hits
+		# /gate/check: 200 -> continue, 302 -> bounce the browser to /gate/login.
+		forward_auth 127.0.0.1:7682 {
+			uri /gate/check
+		}
+		handle /terminal/* {
+			reverse_proxy 127.0.0.1:7681      # ttyd browser terminal
+		}
+		handle /api/* {
+			reverse_proxy 127.0.0.1:7682      # dashboard backend (server.py)
+		}
+		handle {
+			reverse_proxy 127.0.0.1:7682      # SPA (index.html)
+		}
+	}
+}

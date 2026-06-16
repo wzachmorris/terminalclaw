@@ -1,0 +1,14 @@
+[Unit]
+Description=TerminalClaw - ttyd browser terminal (per-project tmux)
+After=network.target docker.service
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/ttyd -p 7681 -i 127.0.0.1 -b /terminal -a -W -m 6 -t "disableLeaveAlert=true" bash /opt/terminalclaw/term.sh
+Restart=always
+RestartSec=2
+User=root
+Environment=TERM=xterm-256color
+
+[Install]
+WantedBy=multi-user.target

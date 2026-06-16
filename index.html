@@ -1,0 +1,219 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>TerminalClaw</title>
+<style>
+  :root{
+    --bg:#0d1117; --panel:#161b22; --panel2:#1c2230; --border:#2a3340;
+    --text:#e6edf3; --muted:#8b949e; --accent:#58a6ff; --green:#3fb950;
+    --red:#f85149; --amber:#d29922;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;font:14px/1.5 ui-sans-serif,system-ui,-apple-system,Segoe UI,Roboto,sans-serif;
+       background:var(--bg);color:var(--text)}
+  header{display:flex;align-items:center;gap:12px;padding:14px 20px;border-bottom:1px solid var(--border);
+         background:var(--panel);position:sticky;top:0;z-index:5}
+  header h1{font-size:16px;margin:0;font-weight:600}
+  header .dot{width:9px;height:9px;border-radius:50%;background:var(--green);box-shadow:0 0 8px var(--green)}
+  header .spacer{flex:1}
+  header button{background:var(--panel2);color:var(--text);border:1px solid var(--border);
+                padding:6px 12px;border-radius:6px;cursor:pointer;font-size:13px}
+  header button:hover{border-color:var(--accent)}
+  .layout{display:grid;grid-template-columns:340px 1fr;height:calc(100vh - 51px)}
+  .sidebar{overflow-y:auto;border-right:1px solid var(--border);padding:12px}
+  .card{background:var(--panel);border:1px solid var(--border);border-radius:8px;padding:12px;
+        margin-bottom:10px;cursor:pointer;transition:border-color .15s}
+  .card:hover{border-color:var(--accent)}
+  .card.active{border-color:var(--accent);background:var(--panel2)}
+  .card h3{margin:0 0 4px;font-size:14px}
+  .card .domains{color:var(--muted);font-size:12px;word-break:break-all}
+  .card .pills{display:flex;flex-wrap:wrap;gap:4px;margin-top:8px}
+  .pill{font-size:11px;padding:2px 7px;border-radius:10px;border:1px solid var(--border);
+        display:flex;align-items:center;gap:5px}
+  .pill .s{width:7px;height:7px;border-radius:50%}
+  .up .s{background:var(--green)} .down .s{background:var(--red)} .absent .s{background:var(--muted)}
+  .main{display:flex;flex-direction:column;overflow:hidden}
+  .tabs{display:flex;gap:4px;padding:10px 14px 0;border-bottom:1px solid var(--border);background:var(--panel)}
+  .tab{padding:7px 14px;border-radius:7px 7px 0 0;cursor:pointer;color:var(--muted);font-size:13px;
+       border:1px solid transparent;border-bottom:none}
+  .tab.active{color:var(--text);background:var(--bg);border-color:var(--border)}
+  .content{flex:1;overflow:hidden;position:relative}
+  .pane{position:absolute;inset:0;overflow:auto;padding:0}
+  .pane.hidden{display:none}
+  #termFrame{width:100%;height:100%;border:0;background:#000}
+  .md{padding:20px 26px;max-width:900px}
+  .md h1,.md h2,.md h3{border-bottom:1px solid var(--border);padding-bottom:4px}
+  .md code{background:var(--panel2);padding:1px 5px;border-radius:4px;font-size:12.5px}
+  .md pre{background:var(--panel2);padding:12px;border-radius:8px;overflow:auto}
+  .md a{color:var(--accent)}
+  .memlist{padding:16px 20px}
+  .memlist .file{padding:9px 12px;border:1px solid var(--border);border-radius:7px;margin-bottom:8px;
+                 cursor:pointer;background:var(--panel)}
+  .memlist .file:hover{border-color:var(--accent)}
+  .memlist .file .desc{color:var(--muted);font-size:12px;margin-top:3px}
+  .empty{padding:40px;color:var(--muted);text-align:center}
+  .back{color:var(--accent);cursor:pointer;font-size:13px;display:inline-block;margin:14px 0 0 20px}
+  .navtoggle{display:none}
+  .scrim{display:none}
+  @media (max-width:760px){
+    .navtoggle{display:inline-block}
+    #clock{display:none}
+    .layout{grid-template-columns:1fr}
+    .sidebar{position:fixed;top:51px;left:0;bottom:0;width:min(85vw,340px);z-index:10;
+             background:var(--bg);transform:translateX(-100%);transition:transform .2s ease;
+             box-shadow:2px 0 16px rgba(0,0,0,.5)}
+    .layout.nav-open .sidebar{transform:translateX(0)}
+    .scrim{position:fixed;inset:51px 0 0 0;background:rgba(0,0,0,.5);z-index:9}
+    .layout.nav-open .scrim{display:block}
+  }
+</style>
+</head>
+<body>
+<header>
+  <button class="navtoggle" onclick="toggleNav()">☰ Projects</button>
+  <span class="dot"></span>
+  <h1>TerminalClaw</h1>
+  <span class="spacer"></span>
+  <span id="clock" style="color:var(--muted);font-size:12px"></span>
+  <button onclick="loadProjects()">↻ Refresh</button>
+</header>
+
+<div class="layout" id="layout">
+  <div class="scrim" onclick="toggleNav(false)"></div>
+  <div class="sidebar" id="sidebar"></div>
+  <div class="main">
+    <div class="tabs">
+      <div class="tab active" data-tab="terminal" onclick="switchTab('terminal')">⌨ Terminal</div>
+      <div class="tab" data-tab="memory" onclick="switchTab('memory')">🧠 Memory &amp; Context</div>
+    </div>
+    <div class="content">
+      <div class="pane" id="pane-terminal">
+        <iframe id="termFrame" src="about:blank"></iframe>
+      </div>
+      <div class="pane hidden" id="pane-memory">
+        <div class="empty">Select a project to view its memory &amp; context.</div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script>
+let PROJECTS = [];
+let CURRENT = null;
+let TAB = "terminal";
+
+function clock(){ const d=new Date(); document.getElementById("clock").textContent=d.toLocaleString(); }
+setInterval(clock,1000); clock();
+
+async function loadProjects(){
+  const r = await fetch("/api/projects");
+  const data = await r.json();
+  PROJECTS = data.projects;
+  renderSidebar();
+  if(!CURRENT && PROJECTS.length) selectProject(PROJECTS[0].id);
+  else if(CURRENT) renderSidebar();
+}
+
+function statusClass(st){
+  if(!st) return "absent";
+  const s=(st.state||"").toLowerCase();
+  if(s==="running") return "up";
+  if(s==="absent") return "absent";
+  return "down";
+}
+
+function renderSidebar(){
+  const sb=document.getElementById("sidebar");
+  sb.innerHTML="";
+  PROJECTS.forEach(p=>{
+    const c=document.createElement("div");
+    c.className="card"+(CURRENT===p.id?" active":"");
+    c.onclick=()=>selectProject(p.id);
+    const pills=(p.containers||[]).map(name=>{
+      const st=p.status?p.status[name]:null; const cls=statusClass(st);
+      return `<span class="pill ${cls}" title="${(st&&st.status)||'n/a'}"><span class="s"></span>${name.replace(/_/g,' ')}</span>`;
+    }).join("");
+    const domains=(p.domains&&p.domains.length)?p.domains.join(", "):"<i>no public domain</i>";
+    c.innerHTML=`<h3>${p.name}</h3><div class="domains">${domains}</div>
+                 <div class="pills">${pills||'<span class="domains">no containers</span>'}</div>`;
+    sb.appendChild(c);
+  });
+}
+
+function selectProject(id){
+  CURRENT=id;
+  renderSidebar();
+  // load per-project terminal session
+  document.getElementById("termFrame").src="/terminal/?arg="+encodeURIComponent(id);
+  renderMemory();
+  toggleNav(false); // on mobile, close the drawer so the terminal is visible
+}
+
+function toggleNav(force){
+  document.getElementById("layout").classList.toggle("nav-open", force);
+}
+
+function switchTab(t){
+  TAB=t;
+  document.querySelectorAll(".tab").forEach(e=>e.classList.toggle("active",e.dataset.tab===t));
+  document.getElementById("pane-terminal").classList.toggle("hidden",t!=="terminal");
+  document.getElementById("pane-memory").classList.toggle("hidden",t!=="memory");
+}
+
+async function renderMemory(){
+  const p=PROJECTS.find(x=>x.id===CURRENT);
+  const pane=document.getElementById("pane-memory");
+  if(!p){pane.innerHTML='<div class="empty">No project.</div>';return;}
+  const files=p.memory||[];
+  if(!files.length){pane.innerHTML='<div class="empty">No memory files linked to <b>'+p.name+'</b> yet.<br><br>Add filenames to its <code>memory</code> array in <code>projects.json</code>.</div>';return;}
+  let html='<div class="memlist"><div style="color:var(--muted);margin-bottom:10px">Memory linked to <b>'+p.name+'</b></div>';
+  for(const f of files){
+    html+=`<div class="file" onclick="openMemory('${f}')"><b>${f}</b><div class="desc" id="desc-${f.replace(/\W/g,'')}">…</div></div>`;
+  }
+  html+='</div>';
+  pane.innerHTML=html;
+  // lazily fetch descriptions
+  for(const f of files){
+    const r=await fetch("/api/memory?file="+encodeURIComponent(f));
+    if(r.ok){const t=(await r.json()).content; const m=t.match(/description:\s*(.*)/);
+      const el=document.getElementById("desc-"+f.replace(/\W/g,''));
+      if(el) el.textContent=m?m[1].trim():"";}
+  }
+}
+
+async function openMemory(f){
+  const r=await fetch("/api/memory?file="+encodeURIComponent(f));
+  const pane=document.getElementById("pane-memory");
+  if(!r.ok){pane.innerHTML='<div class="empty">Could not load '+f+'</div>';return;}
+  const t=(await r.json()).content;
+  pane.innerHTML='<span class="back" onclick="renderMemory()">← back to list</span><div class="md">'+mdToHtml(t)+'</div>';
+}
+
+// minimal, safe-ish markdown renderer (escapes HTML first)
+function esc(s){return s.replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;");}
+function mdToHtml(src){
+  // strip YAML frontmatter into a small box
+  let fm="";
+  const fmm=src.match(/^---\n([\s\S]*?)\n---\n?/);
+  if(fmm){fm='<pre style="font-size:12px;color:var(--muted)">'+esc(fmm[1])+'</pre>';src=src.slice(fmm[0].length);}
+  let h=esc(src);
+  h=h.replace(/```([\s\S]*?)```/g,(m,c)=>'<pre>'+c+'</pre>');
+  h=h.replace(/^### (.*)$/gm,'<h3>$1</h3>')
+     .replace(/^## (.*)$/gm,'<h2>$1</h2>')
+     .replace(/^# (.*)$/gm,'<h1>$1</h1>');
+  h=h.replace(/\[\[([^\]]+)\]\]/g,'<code>$1</code>');
+  h=h.replace(/\*\*([^*]+)\*\*/g,'<b>$1</b>');
+  h=h.replace(/`([^`]+)`/g,'<code>$1</code>');
+  h=h.replace(/^\s*-\s+(.*)$/gm,'<li>$1</li>');
+  h=h.replace(/(<li>[\s\S]*?<\/li>)/g,'<ul>$1</ul>');
+  h=h.replace(/\n{2,}/g,'</p><p>');
+  return fm+'<p>'+h+'</p>';
+}
+
+loadProjects();
+setInterval(loadProjects, 20000); // live status refresh
+</script>
+</body>
+</html>

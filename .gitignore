@@ -1,0 +1,28 @@
+# --- Secrets: NEVER commit ---
+# (comments must be on their own line; an inline # is part of the pattern)
+
+# HMAC key that signs session cookies
+.gate_secret
+# pbkdf2 hash of the layer-2 password
+.gate_pass
+
+# Local Claude Code config (machine-specific)
+.claude/
+
+# Real project registry — maps your whole server (domains, containers, paths).
+# Ship only projects.example.json; copy it to projects.json on each box.
+projects.json
+
+# Cloudflared live credentials (the *.json tunnel secret + account cert).
+# Only deploy/cloudflared/config.yml.example (sanitized) is tracked.
+*.cloudflared-credentials.json
+cert.pem
+
+# Python bytecode
+__pycache__/
+*.pyc
+
+# Editor / OS noise
+*.swp
+*~
+.DS_Store
