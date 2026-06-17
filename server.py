@@ -331,20 +331,10 @@ def _find_project(reg, pid):
     return next((p for p in reg.get("projects", []) if p.get("id") == pid), None)
 
 
-def read_doc(reg, pid, index):
-    """Read the file backing project <pid>'s doc tab #index.
-
-    The path comes from the registry (set via add_tab), never from the client,
-    so the browser can only ever read pre-registered files. Returns a dict with
-    label/file/kind/content; size-capped; missing files surface a friendly note.
-    """
-    proj = _find_project(reg, pid)
-    if not proj:
-        raise ValueError("unknown project")
-    tabs = proj.get("tabs", [])
-    if not (0 <= index < len(tabs)):
-        raise ValueError("unknown tab")
-    spec = tabs[index]
+def _read_spec(spec):
+    """Read a {label,file} doc spec -> {label,file,kind,content}. The path comes
+    from the spec (registry-sourced, never from the client), size-capped; a
+    missing file surfaces a friendly note rather than an error."""
     path = os.path.expanduser(spec.get("file", ""))
     label = spec.get("label", "")
     if not path or not os.path.isfile(path):
@@ -357,6 +347,19 @@ def read_doc(reg, pid, index):
     ext = os.path.splitext(path)[1].lower()
     kind = "markdown" if ext in (".md", ".markdown") else "text"
     return {"label": label, "file": path, "kind": kind, "content": content}
+
+
+def read_doc(reg, pid, index):
+    """Read the file backing project <pid>'s doc tab #index. The path comes from
+    the registry (set via add_tab), never from the client, so the browser can
+    only ever read pre-registered files."""
+    proj = _find_project(reg, pid)
+    if not proj:
+        raise ValueError("unknown project")
+    tabs = proj.get("tabs", [])
+    if not (0 <= index < len(tabs)):
+        raise ValueError("unknown tab")
+    return _read_spec(tabs[index])
 
 
 def add_tab(pid, label, file):
@@ -392,6 +395,122 @@ def remove_tab(pid, index):
     tabs.pop(index)
     proj["tabs"] = tabs
     write_registry(reg)
+
+
+# --- Global reference tabs (Essentials / Credentials) ----------------------
+# Stored as top-level arrays in projects.json (gitignored, per-box) so the
+# filenames are never committed. Same {label,file} shape as project doc tabs.
+GLOBAL_TABS = ("essentials", "credentials")
+EDITABLE_EXT = (".md", ".markdown", ".txt")
+
+
+def read_global_doc(reg, tab, index):
+    """Read global tab <tab>'s entry #index (path from registry, not client)."""
+    if tab not in GLOBAL_TABS:
+        raise ValueError("unknown tab")
+    items = reg.get(tab, [])
+    if not (0 <= index < len(items)):
+        raise ValueError("unknown entry")
+    return _read_spec(items[index])
+
+
+def add_global(tab, file, label=None):
+    """Link an existing file into a global tab. Returns its index."""
+    if tab not in GLOBAL_TABS:
+        raise ValueError("unknown tab")
+    path = os.path.expanduser((file or "").strip())
+    if not path:
+        raise ValueError("file is required")
+    if not os.path.isabs(path):
+        raise ValueError("file must be an absolute path")
+    if not os.path.isfile(path):
+        raise ValueError("file not found: " + path)
+    label = (label or "").strip()[:40] or os.path.basename(path)
+    reg = load_registry()
+    reg.setdefault(tab, []).append({"label": label, "file": path})
+    write_registry(reg)
+    return len(reg[tab]) - 1
+
+
+def remove_global(tab, index):
+    """Unlink entry #index from a global tab (the file itself is not deleted)."""
+    if tab not in GLOBAL_TABS:
+        raise ValueError("unknown tab")
+    reg = load_registry()
+    items = reg.get(tab, [])
+    if not (0 <= index < len(items)):
+        raise ValueError("unknown entry")
+    items.pop(index)
+    reg[tab] = items
+    write_registry(reg)
+
+
+def _editable_path(reg, scope, project, tab, index):
+    """Resolve the on-disk path for an editable doc, addressed by registry index
+    (never a client path). scope is 'project' or 'global'."""
+    if not isinstance(index, int):
+        raise ValueError("index required")
+    if scope == "global":
+        if tab not in GLOBAL_TABS:
+            raise ValueError("unknown tab")
+        items = reg.get(tab, [])
+    elif scope == "project":
+        proj = _find_project(reg, project)
+        if not proj:
+            raise ValueError("unknown project")
+        items = proj.get("tabs", [])
+    else:
+        raise ValueError("unknown scope")
+    if not (0 <= index < len(items)):
+        raise ValueError("unknown entry")
+    return os.path.expanduser(items[index].get("file", ""))
+
+
+def save_doc(scope, content, project=None, tab=None, index=None):
+    """Overwrite an editable (.md/.txt) doc, addressed by registry index.
+
+    The path is resolved from the registry, the extension must be editable, and
+    the file must already exist -- so this can only ever rewrite a file that was
+    deliberately linked into a tab, never an arbitrary client-supplied path."""
+    if not isinstance(content, str):
+        raise ValueError("content required")
+    if len(content.encode("utf-8")) > DOC_MAX:
+        raise ValueError("content too large")
+    reg = load_registry()
+    path = _editable_path(reg, scope, project, tab, index)
+    if not path or not os.path.isabs(path):
+        raise ValueError("bad path")
+    if os.path.splitext(path)[1].lower() not in EDITABLE_EXT:
+        raise ValueError("only .md/.markdown/.txt files are editable")
+    if not os.path.isfile(path):
+        raise ValueError("file not found")
+    tmp = path + ".tmp"
+    with open(tmp, "w", encoding="utf-8") as f:
+        f.write(content)
+    os.replace(tmp, path)
+
+
+def browse_dir(dirpath):
+    """List a directory for the file picker (dirs first, then files). Read-only;
+    auth-gated at the route. Falls back to $HOME for a missing/blank dir."""
+    home = os.path.expanduser("~")
+    base = os.path.abspath(os.path.expanduser(dirpath.strip())) if (dirpath or "").strip() else home
+    if not os.path.isdir(base):
+        base = home
+    entries = []
+    try:
+        for name in os.listdir(base):
+            full = os.path.join(base, name)
+            try:
+                is_dir = os.path.isdir(full)
+            except OSError:
+                continue
+            entries.append({"name": name, "path": full, "is_dir": is_dir})
+    except OSError as e:
+        return {"dir": base, "parent": os.path.dirname(base) or "/", "entries": [], "error": str(e)}
+    entries.sort(key=lambda e: (not e["is_dir"], e["name"].lower()))
+    parent = os.path.dirname(base.rstrip("/")) or "/"
+    return {"dir": base, "parent": parent, "entries": entries[:2000]}
 
 
 def safe_read(directory, name):
@@ -511,6 +630,53 @@ class Handler(BaseHTTPRequestHandler):
                 return self._send(500, {"error": str(e)})
             return self._send(200, {"ok": True})
 
+        if u.path == "/api/globals/add":
+            # Link an existing file into a global tab (Essentials/Credentials).
+            if not self._authed():
+                return self._send(401, {"error": "unauthorized"})
+            data = self._read_json()
+            if not isinstance(data, dict):
+                return self._send(400, {"error": "bad request"})
+            try:
+                idx = add_global(data.get("tab"), data.get("file"), data.get("label"))
+            except ValueError as e:
+                return self._send(400, {"error": str(e)})
+            except Exception as e:
+                return self._send(500, {"error": str(e)})
+            return self._send(200, {"ok": True, "index": idx})
+
+        if u.path == "/api/globals/remove":
+            if not self._authed():
+                return self._send(401, {"error": "unauthorized"})
+            data = self._read_json()
+            if not isinstance(data, dict) or not isinstance(data.get("index"), int):
+                return self._send(400, {"error": "bad request"})
+            try:
+                remove_global(data.get("tab"), data["index"])
+            except ValueError as e:
+                return self._send(400, {"error": str(e)})
+            except Exception as e:
+                return self._send(500, {"error": str(e)})
+            return self._send(200, {"ok": True})
+
+        if u.path == "/api/doc/save":
+            # Overwrite an editable doc, addressed by registry index (never a
+            # client path). Restricted to existing .md/.markdown/.txt files.
+            if not self._authed():
+                return self._send(401, {"error": "unauthorized"})
+            data = self._read_json()
+            if not isinstance(data, dict):
+                return self._send(400, {"error": "bad request"})
+            try:
+                save_doc(data.get("scope"), data.get("content"),
+                         project=data.get("project"), tab=data.get("tab"),
+                         index=data.get("index"))
+            except ValueError as e:
+                return self._send(400, {"error": str(e)})
+            except Exception as e:
+                return self._send(500, {"error": str(e)})
+            return self._send(200, {"ok": True})
+
         return self._send(404, {"error": "unknown route"})
 
     def do_GET(self):
@@ -582,6 +748,26 @@ class Handler(BaseHTTPRequestHandler):
             except ValueError as e:
                 return self._send(404, {"error": str(e)})
             return self._send(200, doc)
+
+        if path == "/api/globaldoc":
+            # Read a global tab's doc by index (path from registry, not client).
+            tab = q.get("tab", [""])[0]
+            try:
+                idx = int(q.get("i", [""])[0])
+            except (ValueError, TypeError):
+                return self._send(400, {"error": "bad index"})
+            try:
+                doc = read_global_doc(load_registry(), tab, idx)
+            except ValueError as e:
+                return self._send(404, {"error": str(e)})
+            return self._send(200, doc)
+
+        if path == "/api/browse":
+            # File picker listing. Sensitive (exposes the filesystem), so it is
+            # auth-gated in-process in addition to the Caddy edge gate.
+            if not self._authed():
+                return self._send(401, {"error": "unauthorized"})
+            return self._send(200, browse_dir(q.get("dir", [""])[0]))
 
         return self._send(404, {"error": "unknown route"})
 

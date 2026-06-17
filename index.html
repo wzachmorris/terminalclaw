@@ -112,6 +112,41 @@
   .docview .addtabform button{padding:9px 16px;border-radius:7px;border:1px solid var(--border);cursor:pointer;
        background:var(--accent);color:#0d1117;font-weight:600;font-size:13px}
   .docview .addtabform button.ghost{background:transparent;color:var(--muted);font-weight:400}
+  /* small inline action buttons (Edit/Save/Add file) */
+  .mini{background:var(--panel2);color:var(--text);border:1px solid var(--border);border-radius:6px;
+        padding:4px 11px;font-size:12px;cursor:pointer;white-space:nowrap}
+  .mini:hover{border-color:var(--accent)}
+  .mini.ghost{background:transparent;color:var(--muted)}
+  .globhd{display:flex;align-items:center;gap:10px;color:var(--muted);margin-bottom:12px}
+  .globhd span{flex:1}
+  /* doc view header bar (back / path / edit) */
+  .docbar{display:flex;align-items:center;gap:12px;margin-bottom:14px}
+  .docbar .docpath{flex:1;margin:0}
+  .docbar .back{cursor:pointer;color:var(--accent)}
+  .editor{width:100%;min-height:62vh;box-sizing:border-box;background:var(--panel2);color:var(--text);
+          border:1px solid var(--border);border-radius:8px;padding:14px;
+          font:13px/1.6 ui-monospace,SFMono-Regular,Menlo,monospace;resize:vertical;tab-size:4}
+  .editor:focus{outline:none;border-color:var(--accent)}
+  /* remove-× on a file list row */
+  .file{position:relative}
+  .file .tabx{position:absolute;right:8px;top:10px;opacity:.5;font-size:16px;line-height:1;
+              padding:0 5px;border-radius:4px}
+  .file .tabx:hover{opacity:1;color:var(--red);background:var(--panel2)}
+  /* file picker modal */
+  .modal{position:fixed;inset:0;background:rgba(0,0,0,.55);display:none;align-items:center;
+         justify-content:center;z-index:50}
+  .modalbox{background:var(--panel);border:1px solid var(--border);border-radius:12px;width:min(560px,92vw);
+            max-height:80vh;display:flex;flex-direction:column;overflow:hidden;box-shadow:0 10px 40px rgba(0,0,0,.6)}
+  .modalhd{display:flex;align-items:center;padding:12px 16px;border-bottom:1px solid var(--border)}
+  .modalhd b{flex:1}
+  .modalhd .x{cursor:pointer;color:var(--muted);font-size:20px;line-height:1}
+  .modalhd .x:hover{color:var(--red)}
+  .crumb{padding:8px 16px;color:var(--muted);font-size:12px;word-break:break-all;border-bottom:1px solid var(--border)}
+  .browse{overflow:auto;padding:6px}
+  .brow{padding:8px 12px;border-radius:7px;cursor:pointer;font-size:13px;white-space:nowrap;
+        overflow:hidden;text-overflow:ellipsis}
+  .brow:hover{background:var(--panel2)}
+  .brow.dir{color:var(--accent)}
   .content{flex:1;overflow:hidden;position:relative}
   .pane{position:absolute;inset:0;overflow:auto;padding:0}
   .pane.hidden{display:none}
@@ -175,6 +210,7 @@
 
 <script>
 let PROJECTS = [];
+let GLOBALS = {essentials:[], credentials:[]};   // per-box reference-tab file lists (from projects.json)
 let CURRENT = null;
 let TAB = "terminal";
 let DRAGGING = false;       // a card is being dragged — suppress poll-driven rebuilds
@@ -193,6 +229,8 @@ async function loadProjects(){
   const r = await fetch("/api/projects");
   const data = await r.json();
   setTitle(data.title);
+  GLOBALS.essentials = data.essentials || [];
+  GLOBALS.credentials = data.credentials || [];
   const prev = PROJECTS.map(p=>p.id).join(",");
   PROJECTS = data.projects;
   if(!CURRENT && PROJECTS.length){ renderSidebar(); selectProject(PROJECTS[0].id); return; }
@@ -469,9 +507,7 @@ async function loadDoc(i){
   try{ r=await fetch("/api/doc?project="+encodeURIComponent(CURRENT)+"&tab="+i); d=await r.json(); }
   catch(e){ pane.innerHTML='<div class="empty">Could not load document.</div>'; return; }
   if(!r.ok){ pane.innerHTML='<div class="empty">'+esc((d&&d.error)||"Not found")+'</div>'; return; }
-  const body = d.kind==="markdown" ? '<div class="md">'+mdToHtml(d.content)+'</div>'
-                                   : '<pre class="raw">'+esc(d.content)+'</pre>';
-  pane.innerHTML='<div class="docview"><div class="docpath">'+esc(d.file)+'</div>'+body+'</div>';
+  showDoc("pane-doc", d, {scope:"project", project:CURRENT, index:i}, null);
 }
 
 function renderAddTabForm(){
@@ -547,42 +583,131 @@ async function openMemory(f){
   pane.innerHTML='<span class="back" onclick="renderMemory()">← back to list</span><div class="md">'+mdToHtml(t)+'</div>';
 }
 
-// ⭐ Essentials + 🔐 Credentials — global cross-cutting reference, the same on
-// every connection. Both pull from the global memory dir via /api/memory with
-// no project param (server falls back to HUB_MEMORY_DIR).
-const ESSENTIALS=["user-profile.md","agent-operating-rules.md","home-network.md",
-                  "minotaur-server.md","device-fleet.md","content-business.md"];
-async function renderEssentials(){
-  const pane=document.getElementById("pane-essentials");
-  let html='<div class="memlist"><div style="color:var(--muted);margin-bottom:10px">'+
-           '⭐ Essentials — cross-cutting reference (same on every connection)</div>';
-  for(const f of ESSENTIALS){
-    html+=`<div class="file" onclick="openEssential('${f}')"><b>${f}</b>`+
-          `<div class="desc" id="edesc-${f.replace(/\W/g,'')}">…</div></div>`;
+// ⭐ Essentials + 🔐 Credentials — per-box reference tabs. The file list lives
+// in the gitignored projects.json (top-level "essentials"/"credentials" arrays),
+// so filenames are never committed. Populate each box via the file picker.
+function renderGlobal(tab){
+  const pane=document.getElementById("pane-"+tab);
+  if(!pane) return;
+  const items=GLOBALS[tab]||[];
+  const title=tab==="essentials"?"⭐ Essentials":"🔐 Credentials";
+  let h='<div class="memlist"><div class="globhd"><span>'+title+
+        ' — files on this box</span><button class="mini" onclick="addGlobal(\''+tab+'\')">+ Add file</button></div>';
+  if(!items.length){
+    h+='<div class="empty">No files linked yet.<br>Click <b>+ Add file</b> to browse this box and link a .md / .txt file.</div>';
+  }else{
+    items.forEach((it,i)=>{
+      h+='<div class="file" onclick="openGlobal(\''+tab+'\','+i+')"><b>'+esc(it.label)+'</b>'+
+         '<span class="tabx" title="Remove from tab" onclick="removeGlobal(event,\''+tab+'\','+i+')">×</span>'+
+         '<div class="desc">'+esc(it.file)+'</div></div>';
+    });
   }
-  pane.innerHTML=html+'</div>';
-  for(const f of ESSENTIALS){
-    const r=await fetch("/api/memory?file="+encodeURIComponent(f));
-    if(r.ok){const t=(await r.json()).content; const m=t.match(/description:\s*(.*)/);
-      const el=document.getElementById("edesc-"+f.replace(/\W/g,''));
-      if(el) el.textContent=m?m[1].trim().replace(/^["']|["']$/g,''):"";}
-  }
+  pane.innerHTML=h+'</div>';
 }
-async function openEssential(f){
-  const pane=document.getElementById("pane-essentials");
-  const r=await fetch("/api/memory?file="+encodeURIComponent(f));
-  if(!r.ok){pane.innerHTML='<div class="empty">Could not load '+esc(f)+'</div>';return;}
-  const t=(await r.json()).content;
-  pane.innerHTML='<span class="back" onclick="renderEssentials()">← back to list</span><div class="md">'+mdToHtml(t)+'</div>';
-}
-async function renderCredentials(){
-  const pane=document.getElementById("pane-credentials");
+function renderEssentials(){ renderGlobal("essentials"); }
+function renderCredentials(){ renderGlobal("credentials"); }
+
+async function openGlobal(tab,i){
+  const pane=document.getElementById("pane-"+tab);
   pane.innerHTML='<div class="empty">Loading…</div>';
-  const r=await fetch("/api/memory?file=credentials.md");
-  if(!r.ok){pane.innerHTML='<div class="empty">Could not load credentials.md</div>';return;}
-  const t=(await r.json()).content;
-  pane.innerHTML='<div class="md">'+mdToHtml(t)+'</div>';
+  let r,d;
+  try{ r=await fetch("/api/globaldoc?tab="+encodeURIComponent(tab)+"&i="+i); d=await r.json(); }
+  catch(e){ pane.innerHTML='<div class="empty">Could not load.</div>'; return; }
+  if(!r.ok){ pane.innerHTML='<div class="empty">'+esc((d&&d.error)||"Not found")+'</div>'; return; }
+  showDoc("pane-"+tab, d, {scope:"global", tab:tab, index:i}, ()=>renderGlobal(tab));
 }
+async function removeGlobal(ev,tab,i){
+  ev.stopPropagation();
+  if(!confirm("Remove this file from the tab? (the file itself is not deleted)")) return;
+  let r;
+  try{ r=await fetch("/api/globals/remove",{method:"POST",headers:{"Content-Type":"application/json"},
+       body:JSON.stringify({tab:tab,index:i})}); }
+  catch(e){ return; }
+  if(!r.ok) return;
+  await loadProjects(); renderGlobal(tab);
+}
+function addGlobal(tab){
+  openPicker(PICKER.dir, async function(path){
+    let r,j;
+    try{ r=await fetch("/api/globals/add",{method:"POST",headers:{"Content-Type":"application/json"},
+         body:JSON.stringify({tab:tab,file:path})}); j=await r.json().catch(()=>({})); }
+    catch(e){ alert("Network error."); return; }
+    if(!r.ok){ alert((j&&j.error)||"Could not add file."); return; }
+    await loadProjects(); renderGlobal(tab);
+  });
+}
+
+// --- shared doc viewer with inline .md/.txt editing -----------------------
+// save: {scope:"project",project,index} | {scope:"global",tab,index} | null (read-only)
+let DOCCTX=null;
+function showDoc(paneId,d,save,back){
+  DOCCTX={paneId:paneId,d:d,save:save,back:back};
+  const pane=document.getElementById(paneId);
+  const missing=/^\(file not found/.test(d.content||"");
+  const canEdit=!!save && !missing && /\.(md|markdown|txt)$/i.test(d.file||"");
+  const body=d.kind==="markdown"?'<div class="md">'+mdToHtml(d.content)+'</div>'
+                                :'<pre class="raw">'+esc(d.content)+'</pre>';
+  let bar='<div class="docbar">';
+  if(back) bar+='<span class="back" onclick="docBack()">← back</span>';
+  bar+='<span class="docpath">'+esc(d.file)+'</span>';
+  if(canEdit) bar+='<button class="mini" onclick="docEdit()">✎ Edit</button>';
+  bar+='</div>';
+  pane.innerHTML='<div class="docview">'+bar+body+'</div>';
+}
+function docBack(){ if(DOCCTX&&DOCCTX.back) DOCCTX.back(); }
+function docEdit(){
+  const d=DOCCTX.d, pane=document.getElementById(DOCCTX.paneId);
+  pane.innerHTML='<div class="docview"><div class="docbar"><span class="docpath">'+esc(d.file)+
+    '</span><button class="mini" onclick="docSave()">✔ Save</button>'+
+    '<button class="mini ghost" onclick="docCancel()">Cancel</button></div>'+
+    '<textarea id="docEditor" class="editor" spellcheck="false"></textarea>'+
+    '<div class="adderr" id="docErr"></div></div>';
+  const ed=document.getElementById("docEditor");
+  ed.value=d.content; ed.focus();
+}
+function docCancel(){ showDoc(DOCCTX.paneId,DOCCTX.d,DOCCTX.save,DOCCTX.back); }
+async function docSave(){
+  const content=document.getElementById("docEditor").value;
+  const err=document.getElementById("docErr");
+  const body=Object.assign({content:content},DOCCTX.save);
+  let r,j;
+  try{ r=await fetch("/api/doc/save",{method:"POST",headers:{"Content-Type":"application/json"},
+       body:JSON.stringify(body)}); j=await r.json().catch(()=>({})); }
+  catch(e){ err.textContent="Network error."; return; }
+  if(!r.ok){ err.textContent=(j&&j.error)||"Could not save."; return; }
+  DOCCTX.d.content=content;                       // reflect the save in the cached doc
+  showDoc(DOCCTX.paneId,DOCCTX.d,DOCCTX.save,DOCCTX.back);
+}
+
+// --- file picker modal (browse this box to link a file) -------------------
+let PICKER={cb:null,dir:"",parent:"",entries:[]};
+function openPicker(startDir,cb){
+  PICKER.cb=cb;
+  let host=document.getElementById("pickerModal");
+  if(!host){ host=document.createElement("div"); host.id="pickerModal"; host.className="modal"; document.body.appendChild(host); }
+  host.style.display="flex";
+  pickerLoad(startDir||"");
+}
+async function pickerLoad(dir){
+  let r,d;
+  try{ r=await fetch("/api/browse?dir="+encodeURIComponent(dir||"")); d=await r.json(); }
+  catch(e){ return; }
+  PICKER.dir=d.dir; PICKER.parent=d.parent; PICKER.entries=d.entries||[];
+  let h='<div class="modalbox"><div class="modalhd"><b>Link a file</b>'+
+        '<span class="x" onclick="closePicker()">×</span></div>'+
+        '<div class="crumb">'+esc(d.dir)+'</div><div class="browse">'+
+        '<div class="brow dir" onclick="pickerLoad(PICKER.parent)">📁 ..</div>';
+  PICKER.entries.forEach((e,i)=>{
+    h+= e.is_dir
+      ? '<div class="brow dir" onclick="pickerInto('+i+')">📁 '+esc(e.name)+'</div>'
+      : '<div class="brow file" onclick="pickerPick('+i+')">📄 '+esc(e.name)+'</div>';
+  });
+  h+='</div></div>';
+  document.getElementById("pickerModal").innerHTML=h;
+}
+function pickerInto(i){ pickerLoad(PICKER.entries[i].path); }
+function pickerPick(i){ const p=PICKER.entries[i].path, cb=PICKER.cb; closePicker(); if(cb) cb(p); }
+function closePicker(){ const m=document.getElementById("pickerModal"); if(m) m.style.display="none"; }
 
 // minimal, safe-ish markdown renderer (escapes HTML first)
 function esc(s){return s.replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;");}
