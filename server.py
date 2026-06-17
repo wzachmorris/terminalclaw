@@ -324,6 +324,76 @@ def add_project(name, directory):
     return pid
 
 
+DOC_MAX = 512 * 1024   # cap on a single document tab's size, bytes
+
+
+def _find_project(reg, pid):
+    return next((p for p in reg.get("projects", []) if p.get("id") == pid), None)
+
+
+def read_doc(reg, pid, index):
+    """Read the file backing project <pid>'s doc tab #index.
+
+    The path comes from the registry (set via add_tab), never from the client,
+    so the browser can only ever read pre-registered files. Returns a dict with
+    label/file/kind/content; size-capped; missing files surface a friendly note.
+    """
+    proj = _find_project(reg, pid)
+    if not proj:
+        raise ValueError("unknown project")
+    tabs = proj.get("tabs", [])
+    if not (0 <= index < len(tabs)):
+        raise ValueError("unknown tab")
+    spec = tabs[index]
+    path = os.path.expanduser(spec.get("file", ""))
+    label = spec.get("label", "")
+    if not path or not os.path.isfile(path):
+        return {"label": label, "file": path, "kind": "text",
+                "content": "(file not found: %s)" % path}
+    with open(path, encoding="utf-8", errors="replace") as f:
+        content = f.read(DOC_MAX + 1)
+    if len(content) > DOC_MAX:
+        content = content[:DOC_MAX] + "\n\n… (truncated)"
+    ext = os.path.splitext(path)[1].lower()
+    kind = "markdown" if ext in (".md", ".markdown") else "text"
+    return {"label": label, "file": path, "kind": kind, "content": content}
+
+
+def add_tab(pid, label, file):
+    """Append a doc tab (label + existing file) to a project. Returns its index."""
+    label = (label or "").strip()[:40]
+    if not label:
+        raise ValueError("label is required")
+    path = os.path.expanduser((file or "").strip())
+    if not path:
+        raise ValueError("file is required")
+    if not os.path.isabs(path):
+        raise ValueError("file must be an absolute path")
+    if not os.path.isfile(path):
+        raise ValueError("file not found: " + path)
+    reg = load_registry()
+    proj = _find_project(reg, pid)
+    if not proj:
+        raise ValueError("unknown project")
+    proj.setdefault("tabs", []).append({"label": label, "file": path})
+    write_registry(reg)
+    return len(proj["tabs"]) - 1
+
+
+def remove_tab(pid, index):
+    """Remove doc tab #index from a project."""
+    reg = load_registry()
+    proj = _find_project(reg, pid)
+    if not proj:
+        raise ValueError("unknown project")
+    tabs = proj.get("tabs", [])
+    if not (0 <= index < len(tabs)):
+        raise ValueError("unknown tab")
+    tabs.pop(index)
+    proj["tabs"] = tabs
+    write_registry(reg)
+
+
 def safe_read(directory, name):
     """Read a file by basename from a single allowed directory."""
     name = os.path.basename(name or "")
@@ -413,6 +483,34 @@ class Handler(BaseHTTPRequestHandler):
                 return self._send(500, {"error": str(e)})
             return self._send(200, {"ok": True, "id": pid})
 
+        if u.path == "/api/project/tabs/add":
+            if not self._authed():
+                return self._send(401, {"error": "unauthorized"})
+            data = self._read_json()
+            if not isinstance(data, dict):
+                return self._send(400, {"error": "bad request"})
+            try:
+                idx = add_tab(data.get("project"), data.get("label"), data.get("file"))
+            except ValueError as e:
+                return self._send(400, {"error": str(e)})
+            except Exception as e:
+                return self._send(500, {"error": str(e)})
+            return self._send(200, {"ok": True, "index": idx})
+
+        if u.path == "/api/project/tabs/remove":
+            if not self._authed():
+                return self._send(401, {"error": "unauthorized"})
+            data = self._read_json()
+            if not isinstance(data, dict) or not isinstance(data.get("index"), int):
+                return self._send(400, {"error": "bad request"})
+            try:
+                remove_tab(data.get("project"), data["index"])
+            except ValueError as e:
+                return self._send(400, {"error": str(e)})
+            except Exception as e:
+                return self._send(500, {"error": str(e)})
+            return self._send(200, {"ok": True})
+
         return self._send(404, {"error": "unknown route"})
 
     def do_GET(self):
@@ -470,6 +568,20 @@ class Handler(BaseHTTPRequestHandler):
             if txt is None:
                 return self._send(404, {"error": "not found"})
             return self._send(200, {"content": txt})
+
+        if path == "/api/doc":
+            # Read a project's doc tab by index. Path comes from the registry,
+            # not the client, so only pre-registered files are reachable.
+            pid = q.get("project", [""])[0]
+            try:
+                idx = int(q.get("tab", [""])[0])
+            except (ValueError, TypeError):
+                return self._send(400, {"error": "bad tab"})
+            try:
+                doc = read_doc(load_registry(), pid, idx)
+            except ValueError as e:
+                return self._send(404, {"error": str(e)})
+            return self._send(200, doc)
 
         return self._send(404, {"error": "unknown route"})
 

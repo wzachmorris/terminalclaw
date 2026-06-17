@@ -13,11 +13,18 @@ port is opened on the VPS; a Cloudflare Tunnel dials out instead.
 Sanitized Caddy / cloudflared / systemd configs: [`deploy/`](deploy).
 
 The project sidebar is interactive: **drag a card to reorder**, **click its swatch
-to assign a color tag**, and a card shows a pulsing green **"Claude is running"**
-light whenever its `tmux` session has an active `claude` agent. Order and colors
-persist to `projects.json` via an auth-checked `POST /api/layout` (so they sync
-across every device). Drag-reorder uses native pointer drag (desktop); color tags
-and the running-light work everywhere.
+to assign a color tag**, **"+ New project"** to add a tab (name + directory), and a
+card shows a pulsing green **"Claude is running"** light whenever its `tmux` session
+has an active `claude` agent. The header **title is click-to-rename**, and a
+**Compact** toggle collapses inactive cards to just their name.
+
+Each project also has its own **document tabs** beside Terminal/Memory: click **+**
+in the tab bar to add one (a label + a file path — `.md` renders as markdown,
+`.txt`/code shows as text), and **×** to remove it. The server only reads files you
+register in `projects.json`, never arbitrary client-supplied paths. All of this
+(order, colors, title, new projects, doc tabs) persists to `projects.json` via
+auth-checked `POST` endpoints, so it syncs across every device. Drag-reorder uses
+native pointer drag (desktop); everything else works everywhere.
 
 ## Repository layout
 ```
