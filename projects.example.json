@@ -7,6 +7,7 @@
       "dir": "/opt/example-app",
       "domains": ["app.example.com", "api.example.com"],
       "containers": ["example_app_frontend", "example_app_backend", "example_app_db"],
+      "services": [],
       "memory": ["example-app-context.md"]
     },
     {
@@ -15,6 +16,16 @@
       "dir": "/opt/example-landing",
       "domains": ["example.com"],
       "containers": ["example_landing"],
+      "services": [],
+      "memory": []
+    },
+    {
+      "id": "example-bot",
+      "name": "Example Bot (systemd, not docker)",
+      "dir": "/opt/example-bot",
+      "domains": ["bot.example.com"],
+      "containers": [],
+      "services": ["example-bot.service", "example-bot-web.service"],
       "memory": []
     },
     {
@@ -23,6 +34,7 @@
       "dir": "/opt/terminalclaw",
       "domains": ["hub.example.com"],
       "containers": [],
+      "services": ["hub-dashboard.service", "hub-ttyd.service"],
       "memory": []
     },
     {
@@ -31,6 +43,7 @@
       "dir": "/root",
       "domains": [],
       "containers": [],
+      "services": [],
       "memory": []
     }
   ]

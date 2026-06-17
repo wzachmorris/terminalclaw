@@ -34,6 +34,9 @@
         display:flex;align-items:center;gap:5px}
   .pill .s{width:7px;height:7px;border-radius:50%}
   .up .s{background:var(--green)} .down .s{background:var(--red)} .absent .s{background:var(--muted)}
+  /* systemd services get a square dot (vs round for containers) + a gear glyph */
+  .pill.svc .s{border-radius:2px}
+  .pill.svc .g{font-size:9px;opacity:.7;margin-right:-2px}
   .main{display:flex;flex-direction:column;overflow:hidden}
   .tabs{display:flex;gap:4px;padding:10px 14px 0;border-bottom:1px solid var(--border);background:var(--panel)}
   .tab{padding:7px 14px;border-radius:7px 7px 0 0;cursor:pointer;color:var(--muted);font-size:13px;
@@ -133,11 +136,17 @@ function renderSidebar(){
     c.onclick=()=>selectProject(p.id);
     const pills=(p.containers||[]).map(name=>{
       const st=p.status?p.status[name]:null; const cls=statusClass(st);
-      return `<span class="pill ${cls}" title="${(st&&st.status)||'n/a'}"><span class="s"></span>${name.replace(/_/g,' ')}</span>`;
+      return `<span class="pill ${cls}" title="container: ${(st&&st.status)||'n/a'}"><span class="s"></span>${name.replace(/_/g,' ')}</span>`;
     }).join("");
+    const svcPills=(p.services||[]).map(name=>{
+      const st=p.svc_status?p.svc_status[name]:null; const cls=statusClass(st);
+      const label=name.replace(/\.service$/,'');
+      return `<span class="pill svc ${cls}" title="systemd: ${(st&&st.status)||'n/a'}"><span class="g">⚙</span><span class="s"></span>${label}</span>`;
+    }).join("");
+    const allPills=pills+svcPills;
     const domains=(p.domains&&p.domains.length)?p.domains.join(", "):"<i>no public domain</i>";
     c.innerHTML=`<h3>${p.name}</h3><div class="domains">${domains}</div>
-                 <div class="pills">${pills||'<span class="domains">no containers</span>'}</div>`;
+                 <div class="pills">${allPills||'<span class="domains">no services</span>'}</div>`;
     sb.appendChild(c);
   });
 }

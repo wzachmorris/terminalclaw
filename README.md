@@ -79,10 +79,21 @@ Append an object to `projects.json` `projects[]`:
 ```json
 { "id": "newproj", "name": "New Project", "dir": "/path/to/src",
   "domains": ["new.example.com"], "containers": ["newproj_web"],
-  "memory": ["some-memory-file.md"] }
+  "services": ["newproj.service"], "memory": ["some-memory-file.md"] }
 ```
 Then `systemctl restart hub-dashboard`. No restart needed for ttyd (it reads
 the registry per session).
+
+### Live status dots
+Each project card shows a live status pill for whatever it runs:
+- **`containers`** — Docker containers (status from `docker ps`). Round dot.
+- **`services`** — systemd units (status from `systemctl is-active`). Square dot
+  with a ⚙ glyph, so services read differently from containers at a glance.
+
+Both use the same colors: green = up (`running` / `active`), red = down
+(`exited` / `inactive` / `failed`), grey = absent (no such container/unit). A
+project can list both, either, or neither; the dots refresh every 20s. `services`
+is optional — omit it and the card just shows containers (or nothing).
 
 ## Auth (two independent, both cookie-based)
 HTTP Basic was dropped because mobile browsers won't re-send it into the

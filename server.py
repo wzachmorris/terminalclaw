@@ -173,6 +173,36 @@ def container_status():
     return out
 
 
+def service_status(units):
+    """Return {unit: {state, status}} for systemd units, so the dashboard can
+    show a live dot for things that run as services rather than containers.
+    State is normalized to match container states ('running' / 'down' /
+    'absent') so the frontend can reuse the same dot colors."""
+    out = {}
+    units = [u for u in units if u]
+    if not units:
+        return out
+    try:
+        res = subprocess.run(
+            ["systemctl", "is-active", *units],
+            capture_output=True, text=True, timeout=10,
+        )
+        lines = res.stdout.splitlines()
+        for i, u in enumerate(units):
+            raw = lines[i].strip() if i < len(lines) else "unknown"
+            if raw == "active":
+                state = "running"
+            elif raw in ("inactive", "failed", "activating", "deactivating", "reloading"):
+                state = "down"
+            else:
+                state = "absent"  # no such unit / unknown
+            out[u] = {"state": state, "status": raw}
+    except Exception as e:
+        for u in units:
+            out[u] = {"state": "down", "status": str(e)}
+    return out
+
+
 def safe_read(directory, name):
     """Read a file by basename from a single allowed directory."""
     name = os.path.basename(name or "")
@@ -250,6 +280,7 @@ class Handler(BaseHTTPRequestHandler):
             for p in reg["projects"]:
                 p["status"] = {c: status.get(c, {"state": "absent", "status": "not found", "ports": ""})
                                for c in p.get("containers", [])}
+                p["svc_status"] = service_status(p.get("services", []))
             reg["generated"] = True
             return self._send(200, reg)
 
