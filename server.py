@@ -151,6 +151,22 @@ def load_registry():
         return json.load(f)
 
 
+def list_md(directory):
+    """Sorted (newest-first) basenames of .md files in a directory."""
+    try:
+        return sorted([f for f in os.listdir(directory) if f.endswith(".md")], reverse=True)
+    except OSError:
+        return []
+
+
+def project_dirs(reg, pid):
+    """Dirs to search for a project's memory: its own memory_dirs + the global MEMORY_DIR."""
+    for p in reg.get("projects", []):
+        if p.get("id") == pid:
+            return list(p.get("memory_dirs", [])) + [MEMORY_DIR]
+    return [MEMORY_DIR]
+
+
 def container_status():
     """Return {name: {state, status, ports}} from docker ps."""
     out = {}
@@ -281,11 +297,19 @@ class Handler(BaseHTTPRequestHandler):
                 p["status"] = {c: status.get(c, {"state": "absent", "status": "not found", "ports": ""})
                                for c in p.get("containers", [])}
                 p["svc_status"] = service_status(p.get("services", []))
+                files = list(p.get("memory", []))
+                for d in p.get("memory_dirs", []):
+                    files += list_md(d)
+                seen = set()
+                p["memory"] = [f for f in files if not (f in seen or seen.add(f))]
             reg["generated"] = True
             return self._send(200, reg)
 
         if path == "/api/memory":
-            txt = safe_read(MEMORY_DIR, q.get("file", [""])[0])
+            pid = q.get("project", [""])[0]
+            name = q.get("file", [""])[0]
+            dirs = project_dirs(load_registry(), pid) if pid else [MEMORY_DIR]
+            txt = next((t for t in (safe_read(d, name) for d in dirs) if t is not None), None)
             if txt is None:
                 return self._send(404, {"error": "not found"})
             return self._send(200, {"content": txt})

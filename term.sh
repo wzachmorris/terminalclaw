@@ -45,12 +45,20 @@ fi
 [[ -z "$PROJ" ]] && menu
 
 DIR="$(reg_field "$PROJ" dir)"
-[[ -z "$DIR" || ! -d "$DIR" ]] && DIR="/root"
+[[ -z "$DIR" || ! -d "$DIR" ]] && DIR="$HOME"
+CMD="$(reg_field "$PROJ" command)"
 SESSION="hub-${PROJ}"
 
 clear
 echo "Project: $PROJ"
 echo "Dir:     $DIR"
-echo "Session: $SESSION   (type 'claude' to open an agent; Ctrl-b d to detach)"
-echo
-exec tmux new-session -A -s "$SESSION" -c "$DIR"
+if [[ -n "$CMD" ]]; then
+  echo "Command: $CMD"
+  echo "Session: $SESSION   (Ctrl-b d to detach)"
+  echo
+  exec tmux new-session -A -s "$SESSION" -c "$DIR" "$CMD"
+else
+  echo "Session: $SESSION   (type 'claude' to open an agent; Ctrl-b d to detach)"
+  echo
+  exec tmux new-session -A -s "$SESSION" -c "$DIR"
+fi

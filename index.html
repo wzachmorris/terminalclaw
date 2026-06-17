@@ -185,7 +185,7 @@ async function renderMemory(){
   pane.innerHTML=html;
   // lazily fetch descriptions
   for(const f of files){
-    const r=await fetch("/api/memory?file="+encodeURIComponent(f));
+    const r=await fetch("/api/memory?project="+encodeURIComponent(CURRENT)+"&file="+encodeURIComponent(f));
     if(r.ok){const t=(await r.json()).content; const m=t.match(/description:\s*(.*)/);
       const el=document.getElementById("desc-"+f.replace(/\W/g,''));
       if(el) el.textContent=m?m[1].trim():"";}
@@ -193,7 +193,7 @@ async function renderMemory(){
 }
 
 async function openMemory(f){
-  const r=await fetch("/api/memory?file="+encodeURIComponent(f));
+  const r=await fetch("/api/memory?project="+encodeURIComponent(CURRENT)+"&file="+encodeURIComponent(f));
   const pane=document.getElementById("pane-memory");
   if(!r.ok){pane.innerHTML='<div class="empty">Could not load '+f+'</div>';return;}
   const t=(await r.json()).content;
