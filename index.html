@@ -166,6 +166,8 @@
       <div class="pane hidden" id="pane-memory">
         <div class="empty">Select a project to view its memory &amp; context.</div>
       </div>
+      <div class="pane hidden" id="pane-essentials"></div>
+      <div class="pane hidden" id="pane-credentials"></div>
       <div class="pane hidden" id="pane-doc"></div>
     </div>
   </div>
@@ -430,7 +432,9 @@ function renderTabs(){
   const p=currentProject();
   const bar=document.getElementById("tabbar");
   let h='<div class="tab" data-tab="terminal" onclick="switchTab(\'terminal\')">⌨ Terminal</div>'+
-        '<div class="tab" data-tab="memory" onclick="switchTab(\'memory\')">🧠 Memory</div>';
+        '<div class="tab" data-tab="memory" onclick="switchTab(\'memory\')">🧠 Memory</div>'+
+        '<div class="tab" data-tab="essentials" onclick="switchTab(\'essentials\')">⭐ Essentials</div>'+
+        '<div class="tab" data-tab="credentials" onclick="switchTab(\'credentials\')">🔐 Credentials</div>';
   ((p&&p.tabs)||[]).forEach((t,i)=>{
     h+=`<div class="tab" data-tab="doc:${i}" onclick="switchTab('doc:${i}')">${esc(t.label)}`+
        `<span class="tabx" title="Remove tab" onclick="removeTab(event,${i})">×</span></div>`;
@@ -449,9 +453,13 @@ function switchTab(t){
   const isDoc=t.indexOf("doc:")===0, isAdd=(t==="addtab");
   document.getElementById("pane-terminal").classList.toggle("hidden",t!=="terminal");
   document.getElementById("pane-memory").classList.toggle("hidden",t!=="memory");
+  document.getElementById("pane-essentials").classList.toggle("hidden",t!=="essentials");
+  document.getElementById("pane-credentials").classList.toggle("hidden",t!=="credentials");
   document.getElementById("pane-doc").classList.toggle("hidden",!(isDoc||isAdd));
   if(isDoc) loadDoc(parseInt(t.slice(4),10));
   else if(isAdd) renderAddTabForm();
+  else if(t==="essentials") renderEssentials();
+  else if(t==="credentials") renderCredentials();
 }
 
 async function loadDoc(i){
@@ -537,6 +545,43 @@ async function openMemory(f){
   if(!r.ok){pane.innerHTML='<div class="empty">Could not load '+f+'</div>';return;}
   const t=(await r.json()).content;
   pane.innerHTML='<span class="back" onclick="renderMemory()">← back to list</span><div class="md">'+mdToHtml(t)+'</div>';
+}
+
+// ⭐ Essentials + 🔐 Credentials — global cross-cutting reference, the same on
+// every connection. Both pull from the global memory dir via /api/memory with
+// no project param (server falls back to HUB_MEMORY_DIR).
+const ESSENTIALS=["user-profile.md","agent-operating-rules.md","home-network.md",
+                  "minotaur-server.md","device-fleet.md","content-business.md"];
+async function renderEssentials(){
+  const pane=document.getElementById("pane-essentials");
+  let html='<div class="memlist"><div style="color:var(--muted);margin-bottom:10px">'+
+           '⭐ Essentials — cross-cutting reference (same on every connection)</div>';
+  for(const f of ESSENTIALS){
+    html+=`<div class="file" onclick="openEssential('${f}')"><b>${f}</b>`+
+          `<div class="desc" id="edesc-${f.replace(/\W/g,'')}">…</div></div>`;
+  }
+  pane.innerHTML=html+'</div>';
+  for(const f of ESSENTIALS){
+    const r=await fetch("/api/memory?file="+encodeURIComponent(f));
+    if(r.ok){const t=(await r.json()).content; const m=t.match(/description:\s*(.*)/);
+      const el=document.getElementById("edesc-"+f.replace(/\W/g,''));
+      if(el) el.textContent=m?m[1].trim().replace(/^["']|["']$/g,''):"";}
+  }
+}
+async function openEssential(f){
+  const pane=document.getElementById("pane-essentials");
+  const r=await fetch("/api/memory?file="+encodeURIComponent(f));
+  if(!r.ok){pane.innerHTML='<div class="empty">Could not load '+esc(f)+'</div>';return;}
+  const t=(await r.json()).content;
+  pane.innerHTML='<span class="back" onclick="renderEssentials()">← back to list</span><div class="md">'+mdToHtml(t)+'</div>';
+}
+async function renderCredentials(){
+  const pane=document.getElementById("pane-credentials");
+  pane.innerHTML='<div class="empty">Loading…</div>';
+  const r=await fetch("/api/memory?file=credentials.md");
+  if(!r.ok){pane.innerHTML='<div class="empty">Could not load credentials.md</div>';return;}
+  const t=(await r.json()).content;
+  pane.innerHTML='<div class="md">'+mdToHtml(t)+'</div>';
 }
 
 // minimal, safe-ish markdown renderer (escapes HTML first)

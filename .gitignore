@@ -18,6 +18,13 @@ projects.json
 *.cloudflared-credentials.json
 cert.pem
 
+# Real access/credential reference docs (host IPs, SSH targets). Never ship.
+docs/*credentials*
+
+# Local backups (may embed the real registry / secrets)
+*.bak
+*.bak.*
+
 # Python bytecode
 __pycache__/
 *.pyc
