@@ -282,11 +282,46 @@ def save_layout(order, colors, title=None):
                 p["color"] = col.lower()
 
     reg["projects"] = projects
+    return write_registry(reg)
+
+
+def write_registry(reg):
+    """Atomically write the registry back to projects.json."""
     tmp = REGISTRY + ".tmp"
     with open(tmp, "w", encoding="utf-8") as f:
         json.dump(reg, f, indent=2, ensure_ascii=False)
     os.replace(tmp, REGISTRY)
     return reg
+
+
+def add_project(name, directory):
+    """Append a new project (name + existing directory) to the registry.
+
+    Generates a unique slug id from the name; other fields default empty.
+    Returns the new id. Raises ValueError on invalid input.
+    """
+    name = (name or "").strip()[:60]
+    if not name:
+        raise ValueError("name is required")
+    directory = os.path.expanduser((directory or "").strip())
+    if not directory:
+        raise ValueError("directory is required")
+    if not os.path.isabs(directory):
+        raise ValueError("directory must be an absolute path")
+    if not os.path.isdir(directory):
+        raise ValueError("directory not found: " + directory)
+    reg = load_registry()
+    existing = {p.get("id") for p in reg.get("projects", [])}
+    base = re.sub(r"[^a-z0-9]+", "-", name.lower()).strip("-") or "tab"
+    pid, n = base, 2
+    while pid in existing:
+        pid, n = f"{base}-{n}", n + 1
+    reg.setdefault("projects", []).append({
+        "id": pid, "name": name, "dir": directory,
+        "domains": [], "containers": [], "services": [], "memory": [],
+    })
+    write_registry(reg)
+    return pid
 
 
 def safe_read(directory, name):
@@ -362,6 +397,21 @@ class Handler(BaseHTTPRequestHandler):
             except Exception as e:
                 return self._send(500, {"error": str(e)})
             return self._send(200, {"ok": True})
+
+        if u.path == "/api/project":
+            # Create a new project tab (name + directory). Auth-gated + validated.
+            if not self._authed():
+                return self._send(401, {"error": "unauthorized"})
+            data = self._read_json()
+            if not isinstance(data, dict):
+                return self._send(400, {"error": "bad request"})
+            try:
+                pid = add_project(data.get("name"), data.get("dir"))
+            except ValueError as e:
+                return self._send(400, {"error": str(e)})
+            except Exception as e:
+                return self._send(500, {"error": str(e)})
+            return self._send(200, {"ok": True, "id": pid})
 
         return self._send(404, {"error": "unknown route"})
 

@@ -76,6 +76,20 @@
   #hubTitle:hover{background:var(--panel2)}
   #hubTitle.editing{background:var(--panel2);box-shadow:inset 0 0 0 1px var(--accent);cursor:text}
   header button.on{border-color:var(--accent);color:var(--accent)}
+  /* add-project row */
+  .addbtn{width:100%;padding:10px;background:transparent;color:var(--muted);border:1px dashed var(--border);
+          border-radius:8px;cursor:pointer;font-size:13px}
+  .addbtn:hover{border-color:var(--accent);color:var(--accent)}
+  .addform{background:var(--panel);border:1px solid var(--accent);border-radius:8px;padding:12px}
+  .addform input{width:100%;box-sizing:border-box;margin-bottom:8px;padding:8px;background:var(--bg);
+                 border:1px solid var(--border);border-radius:6px;color:var(--text);font-size:13px}
+  .addform input:focus{outline:none;border-color:var(--accent)}
+  .addbtns{display:flex;gap:6px}
+  .addform button{flex:1;padding:7px;border-radius:6px;border:1px solid var(--border);cursor:pointer;
+                  background:var(--accent);color:#0d1117;font-weight:600;font-size:13px}
+  .addform button.ghost{background:transparent;color:var(--muted);font-weight:400}
+  .addform button.ghost:hover{border-color:var(--accent);color:var(--text)}
+  .adderr{color:var(--red);font-size:12px;margin-top:7px;min-height:0}
   .main{display:flex;flex-direction:column;overflow:hidden}
   .tabs{display:flex;gap:4px;padding:10px 14px 0;border-bottom:1px solid var(--border);background:var(--panel)}
   .tab{padding:7px 14px;border-radius:7px 7px 0 0;cursor:pointer;color:var(--muted);font-size:13px;
@@ -151,6 +165,7 @@ let PALETTE_OPEN = false;   // the color popover is open — suppress full rebui
 let DRAG_ID = null;
 let TITLE = "TerminalClaw";
 let COMPACT = localStorage.getItem("tc_compact")==="1";   // collapse inactive cards (per-device view pref)
+let ADDING = false;         // the new-project form is open — suppress poll-driven rebuilds
 const PALETTE = ["#f85149","#d29922","#3fb950","#58a6ff","#a371f7","#ec6cb9","#79c0ff","#8b949e"];
 
 function clock(){ const d=new Date(); document.getElementById("clock").textContent=d.toLocaleString(); }
@@ -166,7 +181,7 @@ async function loadProjects(){
   if(!CURRENT && PROJECTS.length){ renderSidebar(); selectProject(PROJECTS[0].id); return; }
   const same = PROJECTS.map(p=>p.id).join(",")===prev;   // same ids, same order?
   if(same) updateStatuses();           // light in-place refresh (dots/pills) — keeps scroll
-  else if(!PALETTE_OPEN) renderSidebar();
+  else if(!PALETTE_OPEN && !ADDING) renderSidebar();
 }
 
 function statusClass(st){
@@ -215,6 +230,10 @@ function renderSidebar(){
                 `<div class="pills">${pillsHtml(p)}</div>`;
     sb.appendChild(c);
   });
+  const add=document.createElement("div");
+  add.id="addRow";
+  add.innerHTML='<button class="addbtn" onclick="openAdd()">+ New project</button>';
+  sb.appendChild(add);
   sb.scrollTop=scroll;
 }
 
@@ -326,6 +345,40 @@ function toggleCompact(){
   localStorage.setItem("tc_compact",COMPACT?"1":"0");
   document.getElementById("collapseBtn").classList.toggle("on",COMPACT);
   renderSidebar();
+}
+
+// --- add a new project tab ------------------------------------------------
+function openAdd(){
+  ADDING=true;
+  const wrap=document.getElementById("addRow");
+  wrap.innerHTML=`<div class="addform">
+    <input id="addName" placeholder="Tab name" maxlength="60" autocomplete="off">
+    <input id="addDir" placeholder="Directory, e.g. /home/wzachmorris/myapp" autocomplete="off">
+    <div class="addbtns"><button onclick="createProject()">Create</button>
+      <button class="ghost" onclick="cancelAdd()">Cancel</button></div>
+    <div class="adderr" id="addErr"></div></div>`;
+  ["addName","addDir"].forEach(id=>document.getElementById(id).addEventListener("keydown",e=>{
+    if(e.key==="Enter"){ e.preventDefault(); createProject(); }
+    else if(e.key==="Escape"){ e.preventDefault(); cancelAdd(); }
+  }));
+  document.getElementById("addName").focus();
+}
+function cancelAdd(){ ADDING=false; renderSidebar(); }
+async function createProject(){
+  const name=document.getElementById("addName").value.trim();
+  const dir=document.getElementById("addDir").value.trim();
+  const err=document.getElementById("addErr");
+  if(!name||!dir){ err.textContent="Name and directory are both required."; return; }
+  let r,j;
+  try{
+    r=await fetch("/api/project",{method:"POST",headers:{"Content-Type":"application/json"},
+      body:JSON.stringify({name,dir})});
+    j=await r.json();
+  }catch(e){ err.textContent="Network error."; return; }
+  if(!r.ok){ err.textContent=(j&&j.error)||"Could not create tab."; return; }
+  ADDING=false;
+  await loadProjects();
+  if(j.id) selectProject(j.id);
 }
 
 // wire title edit (commit on Enter/blur, cancel on Escape) + restore compact state
