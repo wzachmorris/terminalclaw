@@ -246,18 +246,25 @@ def claude_sessions():
 HEX_COLOR = re.compile(r"^#[0-9a-fA-F]{6}$")
 
 
-def save_layout(order, colors):
-    """Persist tab order and color tags into projects.json (atomic, validated).
+def save_layout(order, colors, title=None):
+    """Persist tab order, color tags, and the hub title into projects.json
+    (atomic, validated).
 
     order  : list of project ids defining the new top-to-bottom order. Unknown
              ids are ignored; known ids not listed keep their relative order
              after the listed ones (so a partial order is safe).
     colors : {id: "#rrggbb" | null} — null/empty clears the tag. Only valid
              6-digit hex is accepted; anything else is ignored.
+    title  : new dashboard title (string, trimmed, max 80 chars; ignored if blank).
     Returns the rewritten registry dict.
     """
     reg = load_registry()
     projects = reg.get("projects", [])
+
+    if isinstance(title, str):
+        t = title.strip()[:80]
+        if t:
+            reg["title"] = t
 
     if isinstance(order, list):
         rank = {pid: i for i, pid in enumerate(order) if isinstance(pid, str)}
@@ -351,7 +358,7 @@ class Handler(BaseHTTPRequestHandler):
             if not isinstance(data, dict):
                 return self._send(400, {"error": "bad request"})
             try:
-                save_layout(data.get("order"), data.get("colors"))
+                save_layout(data.get("order"), data.get("colors"), data.get("title"))
             except Exception as e:
                 return self._send(500, {"error": str(e)})
             return self._send(200, {"ok": True})

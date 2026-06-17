@@ -67,6 +67,15 @@
   .card.dragging{opacity:.4}
   .card.drop-before{box-shadow:0 -3px 0 var(--accent)}
   .card.drop-after{box-shadow:0 3px 0 var(--accent)}
+  /* collapsed (inactive) card: name + dots only */
+  .card.compact{padding-top:9px;padding-bottom:9px;margin-bottom:6px}
+  .card.compact .domains,.card.compact .pills{display:none}
+  .card.compact .card-top{gap:7px}
+  /* click-to-rename header title */
+  #hubTitle{cursor:text;border-radius:5px;padding:1px 6px;margin:0 -2px;outline:none}
+  #hubTitle:hover{background:var(--panel2)}
+  #hubTitle.editing{background:var(--panel2);box-shadow:inset 0 0 0 1px var(--accent);cursor:text}
+  header button.on{border-color:var(--accent);color:var(--accent)}
   .main{display:flex;flex-direction:column;overflow:hidden}
   .tabs{display:flex;gap:4px;padding:10px 14px 0;border-bottom:1px solid var(--border);background:var(--panel)}
   .tab{padding:7px 14px;border-radius:7px 7px 0 0;cursor:pointer;color:var(--muted);font-size:13px;
@@ -107,9 +116,10 @@
 <header>
   <button class="navtoggle" onclick="toggleNav()">☰ Projects</button>
   <span class="dot"></span>
-  <h1>TerminalClaw</h1>
+  <h1 id="hubTitle" title="Click to rename" onclick="editTitle()">TerminalClaw</h1>
   <span class="spacer"></span>
   <span id="clock" style="color:var(--muted);font-size:12px"></span>
+  <button id="collapseBtn" onclick="toggleCompact()" title="Collapse inactive projects to their name">⇕ Compact</button>
   <button onclick="loadProjects()">↻ Refresh</button>
 </header>
 
@@ -139,6 +149,8 @@ let TAB = "terminal";
 let DRAGGING = false;       // a card is being dragged — suppress poll-driven rebuilds
 let PALETTE_OPEN = false;   // the color popover is open — suppress full rebuilds
 let DRAG_ID = null;
+let TITLE = "TerminalClaw";
+let COMPACT = localStorage.getItem("tc_compact")==="1";   // collapse inactive cards (per-device view pref)
 const PALETTE = ["#f85149","#d29922","#3fb950","#58a6ff","#a371f7","#ec6cb9","#79c0ff","#8b949e"];
 
 function clock(){ const d=new Date(); document.getElementById("clock").textContent=d.toLocaleString(); }
@@ -148,6 +160,7 @@ async function loadProjects(){
   if(DRAGGING) return;                 // never yank the DOM out from under a drag
   const r = await fetch("/api/projects");
   const data = await r.json();
+  setTitle(data.title);
   const prev = PROJECTS.map(p=>p.id).join(",");
   PROJECTS = data.projects;
   if(!CURRENT && PROJECTS.length){ renderSidebar(); selectProject(PROJECTS[0].id); return; }
@@ -183,7 +196,7 @@ function renderSidebar(){
   sb.innerHTML="";
   PROJECTS.forEach(p=>{
     const c=document.createElement("div");
-    c.className="card"+(CURRENT===p.id?" active":"");
+    c.className="card"+(CURRENT===p.id?" active":"")+(COMPACT&&CURRENT!==p.id?" compact":"");
     c.dataset.id=p.id;
     c.draggable=true;
     if(p.color) c.style.setProperty("--tag",p.color);
@@ -212,6 +225,7 @@ function updateStatuses(){
     const card=document.querySelector('.card[data-id="'+CSS.escape(p.id)+'"]');
     if(!card) return;
     card.classList.toggle("active",CURRENT===p.id);
+    card.classList.toggle("compact",COMPACT&&CURRENT!==p.id);
     if(p.color) card.style.setProperty("--tag",p.color); else card.style.removeProperty("--tag");
     const top=card.querySelector(".card-top");
     let dot=top.querySelector(".claude");
@@ -283,6 +297,47 @@ async function saveLayout(body){
        body:JSON.stringify(body)}); }
   catch(e){ console.warn("layout save failed",e); }
 }
+
+// --- editable hub title (persists to projects.json 'title') ---------------
+function setTitle(t){
+  TITLE=(t&&String(t).trim())||"TerminalClaw";
+  document.title=TITLE;
+  const h=document.getElementById("hubTitle");
+  if(h && document.activeElement!==h) h.textContent=TITLE;   // don't clobber mid-edit
+}
+function editTitle(){
+  const h=document.getElementById("hubTitle");
+  h.contentEditable="true"; h.classList.add("editing"); h.focus();
+  const r=document.createRange(); r.selectNodeContents(h);
+  const s=getSelection(); s.removeAllRanges(); s.addRange(r);
+}
+function commitTitle(){
+  const h=document.getElementById("hubTitle");
+  if(h.contentEditable!=="true") return;
+  h.contentEditable="false"; h.classList.remove("editing");
+  const t=h.textContent.trim().slice(0,80);
+  if(t && t!==TITLE){ TITLE=t; document.title=t; saveLayout({title:t}); }
+  h.textContent=TITLE;
+}
+
+// --- collapse inactive cards ----------------------------------------------
+function toggleCompact(){
+  COMPACT=!COMPACT;
+  localStorage.setItem("tc_compact",COMPACT?"1":"0");
+  document.getElementById("collapseBtn").classList.toggle("on",COMPACT);
+  renderSidebar();
+}
+
+// wire title edit (commit on Enter/blur, cancel on Escape) + restore compact state
+(function initHeader(){
+  const h=document.getElementById("hubTitle");
+  h.addEventListener("blur",commitTitle);
+  h.addEventListener("keydown",e=>{
+    if(e.key==="Enter"){ e.preventDefault(); h.blur(); }
+    else if(e.key==="Escape"){ e.preventDefault(); h.textContent=TITLE; h.blur(); }
+  });
+  document.getElementById("collapseBtn").classList.toggle("on",COMPACT);
+})();
 
 function selectProject(id){
   CURRENT=id;
