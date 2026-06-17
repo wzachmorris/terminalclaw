@@ -37,6 +37,36 @@
   /* systemd services get a square dot (vs round for containers) + a gear glyph */
   .pill.svc .s{border-radius:2px}
   .pill.svc .g{font-size:9px;opacity:.7;margin-right:-2px}
+  /* color tag: left accent bar on a card */
+  .card{position:relative;padding-left:14px}
+  .card::before{content:"";position:absolute;left:0;top:0;bottom:0;width:4px;
+                border-radius:8px 0 0 8px;background:var(--tag,transparent)}
+  /* card header row: claude dot + title + color swatch */
+  .card-top{display:flex;align-items:center;gap:7px}
+  .card-top h3{margin:0;flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  /* "claude is running" indicator light */
+  .claude{width:8px;height:8px;border-radius:50%;background:var(--green);flex:none;
+          box-shadow:0 0 6px var(--green);animation:pulse 1.6s ease-in-out infinite}
+  @keyframes pulse{0%,100%{opacity:1}50%{opacity:.35}}
+  /* color swatch button (opens the palette) */
+  .swatch{width:14px;height:14px;border-radius:50%;flex:none;cursor:pointer;padding:0;
+          border:1px solid var(--border);background:var(--tag,transparent);opacity:.55}
+  .swatch:hover{opacity:1;border-color:var(--accent)}
+  .swatch.empty{background:repeating-conic-gradient(var(--muted) 0 25%,transparent 0 50%) 50%/6px 6px}
+  /* palette popover */
+  .palette{position:absolute;z-index:20;background:var(--panel2);border:1px solid var(--border);
+           border-radius:9px;padding:8px;display:grid;grid-template-columns:repeat(4,18px);gap:7px;
+           box-shadow:0 6px 20px rgba(0,0,0,.5)}
+  .palette b{width:18px;height:18px;border-radius:50%;cursor:pointer;border:1px solid rgba(255,255,255,.15)}
+  .palette b:hover{transform:scale(1.15)}
+  .palette .clear{grid-column:1/5;font-size:11px;color:var(--muted);text-align:center;cursor:pointer;
+                  border:1px solid var(--border);border-radius:6px;padding:3px}
+  .palette .clear:hover{border-color:var(--accent);color:var(--text)}
+  /* drag-to-reorder */
+  .card[draggable=true]{cursor:grab}
+  .card.dragging{opacity:.4}
+  .card.drop-before{box-shadow:0 -3px 0 var(--accent)}
+  .card.drop-after{box-shadow:0 3px 0 var(--accent)}
   .main{display:flex;flex-direction:column;overflow:hidden}
   .tabs{display:flex;gap:4px;padding:10px 14px 0;border-bottom:1px solid var(--border);background:var(--panel)}
   .tab{padding:7px 14px;border-radius:7px 7px 0 0;cursor:pointer;color:var(--muted);font-size:13px;
@@ -106,17 +136,24 @@
 let PROJECTS = [];
 let CURRENT = null;
 let TAB = "terminal";
+let DRAGGING = false;       // a card is being dragged — suppress poll-driven rebuilds
+let PALETTE_OPEN = false;   // the color popover is open — suppress full rebuilds
+let DRAG_ID = null;
+const PALETTE = ["#f85149","#d29922","#3fb950","#58a6ff","#a371f7","#ec6cb9","#79c0ff","#8b949e"];
 
 function clock(){ const d=new Date(); document.getElementById("clock").textContent=d.toLocaleString(); }
 setInterval(clock,1000); clock();
 
 async function loadProjects(){
+  if(DRAGGING) return;                 // never yank the DOM out from under a drag
   const r = await fetch("/api/projects");
   const data = await r.json();
+  const prev = PROJECTS.map(p=>p.id).join(",");
   PROJECTS = data.projects;
-  renderSidebar();
-  if(!CURRENT && PROJECTS.length) selectProject(PROJECTS[0].id);
-  else if(CURRENT) renderSidebar();
+  if(!CURRENT && PROJECTS.length){ renderSidebar(); selectProject(PROJECTS[0].id); return; }
+  const same = PROJECTS.map(p=>p.id).join(",")===prev;   // same ids, same order?
+  if(same) updateStatuses();           // light in-place refresh (dots/pills) — keeps scroll
+  else if(!PALETTE_OPEN) renderSidebar();
 }
 
 function statusClass(st){
@@ -127,28 +164,124 @@ function statusClass(st){
   return "down";
 }
 
+function pillsHtml(p){
+  const pills=(p.containers||[]).map(name=>{
+    const st=p.status?p.status[name]:null; const cls=statusClass(st);
+    return `<span class="pill ${cls}" title="container: ${(st&&st.status)||'n/a'}"><span class="s"></span>${name.replace(/_/g,' ')}</span>`;
+  }).join("");
+  const svc=(p.services||[]).map(name=>{
+    const st=p.svc_status?p.svc_status[name]:null; const cls=statusClass(st);
+    const label=name.replace(/\.service$/,'');
+    return `<span class="pill svc ${cls}" title="systemd: ${(st&&st.status)||'n/a'}"><span class="g">⚙</span><span class="s"></span>${label}</span>`;
+  }).join("");
+  return (pills+svc)||'<span class="domains">no services</span>';
+}
+
 function renderSidebar(){
   const sb=document.getElementById("sidebar");
+  const scroll=sb.scrollTop;            // preserve scroll across rebuilds
   sb.innerHTML="";
   PROJECTS.forEach(p=>{
     const c=document.createElement("div");
     c.className="card"+(CURRENT===p.id?" active":"");
+    c.dataset.id=p.id;
+    c.draggable=true;
+    if(p.color) c.style.setProperty("--tag",p.color);
     c.onclick=()=>selectProject(p.id);
-    const pills=(p.containers||[]).map(name=>{
-      const st=p.status?p.status[name]:null; const cls=statusClass(st);
-      return `<span class="pill ${cls}" title="container: ${(st&&st.status)||'n/a'}"><span class="s"></span>${name.replace(/_/g,' ')}</span>`;
-    }).join("");
-    const svcPills=(p.services||[]).map(name=>{
-      const st=p.svc_status?p.svc_status[name]:null; const cls=statusClass(st);
-      const label=name.replace(/\.service$/,'');
-      return `<span class="pill svc ${cls}" title="systemd: ${(st&&st.status)||'n/a'}"><span class="g">⚙</span><span class="s"></span>${label}</span>`;
-    }).join("");
-    const allPills=pills+svcPills;
+    c.addEventListener("dragstart",onDragStart);
+    c.addEventListener("dragover",onDragOver);
+    c.addEventListener("dragleave",onDragLeave);
+    c.addEventListener("drop",onDrop);
+    c.addEventListener("dragend",onDragEnd);
     const domains=(p.domains&&p.domains.length)?p.domains.join(", "):"<i>no public domain</i>";
-    c.innerHTML=`<h3>${p.name}</h3><div class="domains">${domains}</div>
-                 <div class="pills">${allPills||'<span class="domains">no services</span>'}</div>`;
+    const dot=p.claude_running?'<span class="claude" title="Claude is running"></span>':'';
+    c.innerHTML=`<div class="card-top">${dot}<h3>${esc(p.name)}</h3>`+
+                `<button class="swatch ${p.color?'':'empty'}" title="Color tag" `+
+                `onclick="openPalette(event,'${p.id}')"></button></div>`+
+                `<div class="domains">${domains}</div>`+
+                `<div class="pills">${pillsHtml(p)}</div>`;
     sb.appendChild(c);
   });
+  sb.scrollTop=scroll;
+}
+
+// In-place refresh of the dynamic bits only (claude dot, container pills,
+// active/color state) so the 6s poll doesn't rebuild the list or reset scroll.
+function updateStatuses(){
+  PROJECTS.forEach(p=>{
+    const card=document.querySelector('.card[data-id="'+CSS.escape(p.id)+'"]');
+    if(!card) return;
+    card.classList.toggle("active",CURRENT===p.id);
+    if(p.color) card.style.setProperty("--tag",p.color); else card.style.removeProperty("--tag");
+    const top=card.querySelector(".card-top");
+    let dot=top.querySelector(".claude");
+    if(p.claude_running&&!dot){ dot=document.createElement("span"); dot.className="claude";
+      dot.title="Claude is running"; top.insertBefore(dot,top.firstChild); }
+    else if(!p.claude_running&&dot){ dot.remove(); }
+    const sw=top.querySelector(".swatch"); if(sw) sw.classList.toggle("empty",!p.color);
+    const pe=card.querySelector(".pills"); if(pe) pe.innerHTML=pillsHtml(p);
+  });
+}
+
+// --- drag-to-reorder (desktop pointer drag) -------------------------------
+function onDragStart(e){ DRAG_ID=this.dataset.id; DRAGGING=true; this.classList.add("dragging");
+  e.dataTransfer.effectAllowed="move"; try{e.dataTransfer.setData("text/plain",DRAG_ID);}catch(_){}}
+function onDragOver(e){
+  if(!DRAG_ID||this.dataset.id===DRAG_ID) return;
+  e.preventDefault(); e.dataTransfer.dropEffect="move";
+  const r=this.getBoundingClientRect(); const after=e.clientY>r.top+r.height/2;
+  this.classList.toggle("drop-after",after);
+  this.classList.toggle("drop-before",!after);
+}
+function onDragLeave(){ this.classList.remove("drop-before","drop-after"); }
+function onDrop(e){
+  e.preventDefault();
+  const after=this.classList.contains("drop-after");
+  this.classList.remove("drop-before","drop-after");
+  const fromId=DRAG_ID, toId=this.dataset.id;
+  if(!fromId||fromId===toId) return;
+  const from=PROJECTS.findIndex(p=>p.id===fromId);
+  const moved=PROJECTS.splice(from,1)[0];
+  let to=PROJECTS.findIndex(p=>p.id===toId);
+  if(after) to+=1;
+  PROJECTS.splice(to,0,moved);
+  renderSidebar();
+  saveLayout({order:PROJECTS.map(p=>p.id)});
+}
+function onDragEnd(){ DRAGGING=false; DRAG_ID=null;
+  document.querySelectorAll(".card").forEach(c=>c.classList.remove("dragging","drop-before","drop-after")); }
+
+// --- color tags -----------------------------------------------------------
+function openPalette(ev,id){
+  ev.stopPropagation();
+  closePalette();
+  PALETTE_OPEN=true;
+  const sw=ev.currentTarget, card=sw.closest(".card");
+  const pop=document.createElement("div");
+  pop.className="palette"; pop.id="palette";
+  pop.innerHTML=PALETTE.map(c=>`<b style="background:${c}" data-c="${c}"></b>`).join("")+
+                '<div class="clear" data-c="">Clear tag</div>';
+  pop.addEventListener("click",e=>{
+    const t=e.target.closest("[data-c]"); if(!t) return;
+    e.stopPropagation(); setColor(id,t.getAttribute("data-c")); closePalette();
+  });
+  card.appendChild(pop);
+  pop.style.top=(sw.offsetTop+sw.offsetHeight+6)+"px";
+  pop.style.left=Math.max(8,sw.offsetLeft-92)+"px";
+  setTimeout(()=>document.addEventListener("click",closePalette,{once:true}),0);
+}
+function closePalette(){ const p=document.getElementById("palette"); if(p)p.remove(); PALETTE_OPEN=false; }
+function setColor(id,color){
+  const p=PROJECTS.find(x=>x.id===id); if(!p) return;
+  if(color) p.color=color; else delete p.color;
+  renderSidebar();
+  saveLayout({colors:{[id]:color||null}});
+}
+
+async function saveLayout(body){
+  try{ await fetch("/api/layout",{method:"POST",headers:{"Content-Type":"application/json"},
+       body:JSON.stringify(body)}); }
+  catch(e){ console.warn("layout save failed",e); }
 }
 
 function selectProject(id){
@@ -222,7 +355,7 @@ function mdToHtml(src){
 }
 
 loadProjects();
-setInterval(loadProjects, 20000); // live status refresh
+setInterval(loadProjects, 6000); // live status refresh (claude indicator, container state)
 </script>
 </body>
 </html>

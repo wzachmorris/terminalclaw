@@ -8,7 +8,9 @@
       "domains": ["app.example.com", "api.example.com"],
       "containers": ["example_app_frontend", "example_app_backend", "example_app_db"],
       "services": [],
-      "memory": ["example-app-context.md"]
+      "memory": ["example-app-context.md"],
+      "color": "#58a6ff",
+      "_comment": "Optional fields: 'color' (#rrggbb tab tag), 'services' (systemd units to show a status dot for), 'command' (run instead of a shell, e.g. 'ssh box'), 'memory_dirs' (extra dirs of .md to surface). Tab order = array order; both order and color are editable from the dashboard (drag to reorder, click the swatch) and written back here."
     },
     {
       "id": "example-landing",

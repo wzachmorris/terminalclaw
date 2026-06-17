@@ -12,6 +12,13 @@ port is opened on the VPS; a Cloudflare Tunnel dials out instead.
 📐 **Full request flow, tunnel, and auth design: [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md).**
 Sanitized Caddy / cloudflared / systemd configs: [`deploy/`](deploy).
 
+The project sidebar is interactive: **drag a card to reorder**, **click its swatch
+to assign a color tag**, and a card shows a pulsing green **"Claude is running"**
+light whenever its `tmux` session has an active `claude` agent. Order and colors
+persist to `projects.json` via an auth-checked `POST /api/layout` (so they sync
+across every device). Drag-reorder uses native pointer drag (desktop); color tags
+and the running-light work everywhere.
+
 ## Repository layout
 ```
 server.py        dashboard backend (stdlib HTTP): SPA + /api/* + /gate/* cookie login

@@ -28,6 +28,7 @@ import hashlib
 import hmac
 import json
 import os
+import re
 import secrets
 import subprocess
 import time
@@ -219,6 +220,68 @@ def service_status(units):
     return out
 
 
+def claude_sessions():
+    """Set of project ids whose tmux session (hub-<id>) is running `claude`.
+
+    term.sh attaches each project to a tmux session named hub-<id>; when an
+    agent is active, the pane's foreground command is the `claude` binary.
+    """
+    ids = set()
+    try:
+        res = subprocess.run(
+            ["tmux", "list-panes", "-a", "-F", "#{session_name}\t#{pane_current_command}"],
+            capture_output=True, text=True, timeout=5,
+        )
+        for line in res.stdout.splitlines():
+            if "\t" not in line:
+                continue
+            sess, cmd = line.split("\t", 1)
+            if sess.startswith("hub-") and cmd.strip() == "claude":
+                ids.add(sess[len("hub-"):])
+    except Exception:
+        pass
+    return ids
+
+
+HEX_COLOR = re.compile(r"^#[0-9a-fA-F]{6}$")
+
+
+def save_layout(order, colors):
+    """Persist tab order and color tags into projects.json (atomic, validated).
+
+    order  : list of project ids defining the new top-to-bottom order. Unknown
+             ids are ignored; known ids not listed keep their relative order
+             after the listed ones (so a partial order is safe).
+    colors : {id: "#rrggbb" | null} — null/empty clears the tag. Only valid
+             6-digit hex is accepted; anything else is ignored.
+    Returns the rewritten registry dict.
+    """
+    reg = load_registry()
+    projects = reg.get("projects", [])
+
+    if isinstance(order, list):
+        rank = {pid: i for i, pid in enumerate(order) if isinstance(pid, str)}
+        projects.sort(key=lambda p: rank.get(p.get("id"), len(rank) + 1))
+
+    if isinstance(colors, dict):
+        by_id = {p.get("id"): p for p in projects}
+        for pid, col in colors.items():
+            p = by_id.get(pid)
+            if not p:
+                continue
+            if col in (None, ""):
+                p.pop("color", None)
+            elif isinstance(col, str) and HEX_COLOR.match(col):
+                p["color"] = col.lower()
+
+    reg["projects"] = projects
+    tmp = REGISTRY + ".tmp"
+    with open(tmp, "w", encoding="utf-8") as f:
+        json.dump(reg, f, indent=2, ensure_ascii=False)
+    os.replace(tmp, REGISTRY)
+    return reg
+
+
 def safe_read(directory, name):
     """Read a file by basename from a single allowed directory."""
     name = os.path.basename(name or "")
@@ -254,6 +317,20 @@ class Handler(BaseHTTPRequestHandler):
         self.send_header("Content-Length", "0")
         self.end_headers()
 
+    def _authed(self):
+        """True iff the request carries a valid layer-2 session cookie."""
+        tok = cookie_value(self.headers, COOKIE)
+        return bool(tok and token_valid(tok))
+
+    def _read_json(self):
+        length = int(self.headers.get("Content-Length", "0") or 0)
+        if length <= 0 or length > 1_000_000:
+            return None
+        try:
+            return json.loads(self.rfile.read(length).decode("utf-8", "replace"))
+        except Exception:
+            return None
+
     def do_POST(self):
         u = urlparse(self.path)
         if u.path == "/gate/login":
@@ -264,6 +341,21 @@ class Handler(BaseHTTPRequestHandler):
                 return self._redirect("/", _cookie_header(make_token(), TTL))
             err = '<div class="err">Wrong password.</div>'
             return self._send(401, LOGIN_HTML.format(err=err), "text/html; charset=utf-8")
+
+        if u.path == "/api/layout":
+            # Persist tab order + color tags. Mutating route, so enforce auth
+            # in-process too (not just at the Caddy edge).
+            if not self._authed():
+                return self._send(401, {"error": "unauthorized"})
+            data = self._read_json()
+            if not isinstance(data, dict):
+                return self._send(400, {"error": "bad request"})
+            try:
+                save_layout(data.get("order"), data.get("colors"))
+            except Exception as e:
+                return self._send(500, {"error": str(e)})
+            return self._send(200, {"ok": True})
+
         return self._send(404, {"error": "unknown route"})
 
     def do_GET(self):
@@ -293,10 +385,12 @@ class Handler(BaseHTTPRequestHandler):
         if path == "/api/projects":
             reg = load_registry()
             status = container_status()
+            agents = claude_sessions()
             for p in reg["projects"]:
                 p["status"] = {c: status.get(c, {"state": "absent", "status": "not found", "ports": ""})
                                for c in p.get("containers", [])}
                 p["svc_status"] = service_status(p.get("services", []))
+                p["claude_running"] = p.get("id") in agents
                 files = list(p.get("memory", []))
                 for d in p.get("memory_dirs", []):
                     files += list_md(d)
