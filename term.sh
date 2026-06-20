@@ -7,7 +7,10 @@
 # page reloads. With no arg it shows an interactive menu.
 
 set -uo pipefail
-REG="${HUB_REGISTRY:-/opt/terminalclaw/projects.json}"
+# Resolve the hub's own directory so nothing is tied to one box's path
+# (works at /opt/terminalclaw, /root/hub, anywhere the repo is checked out).
+HUB_DIR="$(cd "$(dirname "$(readlink -f "$0" 2>/dev/null || echo "$0")")" && pwd)"
+REG="${HUB_REGISTRY:-$HUB_DIR/projects.json}"
 export PATH="$HOME/.local/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:$HOME/.nvm/versions/node/v22.22.0/bin"
 
 reg_field() {
@@ -53,7 +56,7 @@ SESSION="hub-${PROJ}"
 # Build this project's CLAUDE.md (agent brief) up front, so it's in place before
 # the shell starts. The `claude` wrapper (agent.bashrc) also refreshes it on each
 # launch, so it always reflects the project's currently-attached tabs.
-python3 /opt/terminalclaw/gen_claude_md.py "$PROJ" >/dev/null 2>&1 || true
+python3 "$HUB_DIR/gen_claude_md.py" "$PROJ" >/dev/null 2>&1 || true
 
 clear
 echo "🐾 ${NAME} — project agent"
@@ -63,11 +66,11 @@ echo "   tmux:   ${SESSION}   (Ctrl-b d to detach)"
 if [[ -n "$CMD" ]]; then
   echo "   run:    ${CMD}"
   echo
-  exec tmux new-session -A -s "$SESSION" -e "TC_PROJECT=$PROJ" -c "$DIR" "$CMD"
+  exec tmux new-session -A -s "$SESSION" -e "TC_PROJECT=$PROJ" -e "TC_HUB=$HUB_DIR" -c "$DIR" "$CMD"
 else
   echo
   echo "   type 'claude' to start — it reads this project's memory first."
   echo
-  exec tmux new-session -A -s "$SESSION" -e "TC_PROJECT=$PROJ" -c "$DIR" \
-       "bash --rcfile /opt/terminalclaw/agent.bashrc -i"
+  exec tmux new-session -A -s "$SESSION" -e "TC_PROJECT=$PROJ" -e "TC_HUB=$HUB_DIR" -c "$DIR" \
+       "bash --rcfile $HUB_DIR/agent.bashrc -i"
 fi

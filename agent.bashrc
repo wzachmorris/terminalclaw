@@ -10,8 +10,8 @@ if [ -f "$HOME/.bashrc" ]; then . "$HOME/.bashrc"; fi
 # 2. The wrapper. TC_PROJECT is set per-session by term.sh (tmux -e). On every
 #    launch it regenerates CLAUDE.md from projects.json, then runs real claude.
 claude() {
-  if [ -n "${TC_PROJECT:-}" ] && [ -f /opt/terminalclaw/gen_claude_md.py ]; then
-    python3 /opt/terminalclaw/gen_claude_md.py "$TC_PROJECT" >/dev/null 2>&1
+  if [ -n "${TC_PROJECT:-}" ] && [ -n "${TC_HUB:-}" ] && [ -f "$TC_HUB/gen_claude_md.py" ]; then
+    python3 "$TC_HUB/gen_claude_md.py" "$TC_PROJECT" >/dev/null 2>&1
   fi
   command claude "$@"
 }

@@ -8,7 +8,9 @@
 # updates tclaw itself too. In the dashboard's terminals you're already root
 # (no password); over SSH as your user it re-runs itself with sudo.
 set -uo pipefail
-DIR=/opt/terminalclaw
+# Self-locate the checkout (works at /opt/terminalclaw, /root/hub, anywhere) by
+# resolving this script's real path through the /usr/local/bin symlink.
+DIR="$(cd "$(dirname "$(readlink -f "$0")")" && pwd)"
 SERVICES="hub-dashboard hub-ttyd"
 
 # Re-run as root if we aren't already (git pull + systemctl need it).
