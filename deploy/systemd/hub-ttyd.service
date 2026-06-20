@@ -9,6 +9,9 @@ Restart=always
 RestartSec=2
 User=root
 Environment=TERM=xterm-256color
+# Only kill ttyd itself on stop/restart — leave the tmux server (and any running
+# claude) alive, so restarts/`tclaw update` don't drop your live sessions.
+KillMode=process
 
 [Install]
 WantedBy=multi-user.target

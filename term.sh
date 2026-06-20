@@ -69,7 +69,8 @@ if [[ -n "$CMD" ]]; then
   exec tmux new-session -A -s "$SESSION" -e "TC_PROJECT=$PROJ" -e "TC_HUB=$HUB_DIR" -c "$DIR" "$CMD"
 else
   echo
-  echo "   type 'claude' to start — it reads this project's memory first."
+  echo "   type 'claude' — resumes your last chat + reads this project's memory"
+  echo "                   ('command claude' starts a fresh conversation)"
   echo
   exec tmux new-session -A -s "$SESSION" -e "TC_PROJECT=$PROJ" -e "TC_HUB=$HUB_DIR" -c "$DIR" \
        "bash --rcfile $HUB_DIR/agent.bashrc -i"
