@@ -13,6 +13,11 @@
 # Ship only projects.example.json; copy it to projects.json on each box.
 projects.json
 
+# Per-box agent memory files (machine-specific, like projects.json) and the
+# CLAUDE.md agent brief that term.sh/gen_claude_md.py regenerate on every launch.
+memory/
+CLAUDE.md
+
 # Cloudflared live credentials (the *.json tunnel secret + account cert).
 # Only deploy/cloudflared/config.yml.example (sanitized) is tracked.
 *.cloudflared-credentials.json
