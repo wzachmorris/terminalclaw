@@ -1,0 +1,52 @@
+#!/usr/bin/env bash
+# tclaw — TerminalClaw control helper.
+#   tclaw update    pull latest code from GitHub and restart the app
+#   tclaw restart   restart the dashboard + terminal services
+#   tclaw status    show the running version + service health
+#
+# Lives in the repo and is symlinked into /usr/local/bin, so `tclaw update`
+# updates tclaw itself too. In the dashboard's terminals you're already root
+# (no password); over SSH as your user it re-runs itself with sudo.
+set -uo pipefail
+DIR=/opt/terminalclaw
+SERVICES="hub-dashboard hub-ttyd"
+
+# Re-run as root if we aren't already (git pull + systemctl need it).
+if [ "$(id -u)" -ne 0 ]; then exec sudo "$0" "$@"; fi
+
+case "${1:-help}" in
+  update)
+    cd "$DIR" || { echo "✗ missing $DIR"; exit 1; }
+    echo "→ Fetching latest from GitHub…"
+    before=$(git rev-parse --short HEAD 2>/dev/null || echo none)
+    if ! git pull --ff-only origin main; then
+      echo "✗ Pull failed (local edits on the Pi, or no network). Nothing restarted."
+      exit 1
+    fi
+    after=$(git rev-parse --short HEAD)
+    if [ "$before" = "$after" ]; then
+      echo "✓ Already up to date ($after)."
+    else
+      echo "→ Updated $before → $after. Restarting services…"
+      systemctl restart $SERVICES
+      echo "✓ Done — now running $after."
+    fi
+    ;;
+  restart)
+    systemctl restart $SERVICES && echo "✓ Restarted:$SERVICES"
+    ;;
+  status)
+    cd "$DIR" 2>/dev/null && echo "commit: $(git rev-parse --short HEAD) — $(git log -1 --format=%s)"
+    for s in $SERVICES caddy cloudflared; do
+      printf "  %-14s %s\n" "$s" "$(systemctl is-active "$s" 2>/dev/null)"
+    done
+    ;;
+  *)
+    cat <<'EOF'
+tclaw — TerminalClaw control
+  tclaw update    pull latest code from GitHub and restart the app
+  tclaw restart   restart the dashboard + terminal services
+  tclaw status    show the running version + service health
+EOF
+    ;;
+esac
