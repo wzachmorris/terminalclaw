@@ -25,6 +25,8 @@ cert.pem
 
 # Real access/credential reference docs (host IPs, SSH targets). Never ship.
 docs/*credentials*
+# Essentials cheat-sheets also embed host IPs / SSH targets / domains. Never ship.
+docs/*essentials*
 
 # Local backups (may embed the real registry / secrets)
 *.bak
