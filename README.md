@@ -30,11 +30,55 @@ native pointer drag (desktop); everything else works everywhere.
 ```
 server.py        dashboard backend (stdlib HTTP): SPA + /api/* + /gate/* cookie login
 index.html       vanilla-JS SPA
-term.sh          ttyd launcher: project id -> dir -> persistent tmux session
+term.sh          ttyd launcher: project id -> dir -> persistent tmux session; sets up the agent shell
+gen_claude_md.py builds a project's CLAUDE.md "brief" from its tabs (memory @-imported)
+agent.bashrc     per-session shell init: the `claude` wrapper (refresh brief + auto-resume)
+tclaw            control helper: `tclaw update|status|restart` (self-locating, service-name agnostic)
 projects.json    project registry (edit to add/rename projects, link memory)
 docs/            ARCHITECTURE.md (tunnel + auth deep-dive)
 deploy/          caddy block, cloudflared config template, systemd units
 ```
+
+## Per-project agents & memory
+
+Each project's terminal is a **project-scoped Claude Code agent**, not just a shell in a
+folder. When you open a project and type `claude`:
+
+1. **The brief is rebuilt.** A `claude` shell wrapper (in `agent.bashrc`, wired up by
+   `term.sh`) runs `gen_claude_md.py`, which writes a fresh `CLAUDE.md` into the project's
+   directory from its currently-attached tabs. The project's **memory** files are
+   `@`-imported (Claude Code force-reads them at launch); doc tabs + Essentials/Credentials
+   are listed as paths (read on demand, so secrets aren't dumped into context up front).
+2. **Claude starts grounded.** Because Claude Code auto-loads `CLAUDE.md`, the agent boots
+   already knowing the project — no clean slate. Add or remove a tab and the next `claude`
+   reflects it (the brief is regenerated every launch; it's disposable, so it's gitignored).
+
+The **🧠 Memory tab** manages this from the browser: **+ Add memory** creates/edits a
+force-read `.md`; the tab also surfaces **Claude Code's own per-project memory** (what the
+agent chose to remember, from `~/.claude/projects/<dir-slug>/memory/`) in a second group —
+so you see and edit both your brief and the agent's recall in one place.
+
+## Persistent conversations
+
+- **Auto-resume.** A bare `claude` resumes the directory's most recent conversation if one
+  exists (Claude Code journals every turn to disk), so reopening a project picks up where you
+  left off — even after a reboot. `command claude` starts a fresh chat.
+- **Survive restarts.** The ttyd unit ships with `KillMode=process`, so restarting the service
+  / running `tclaw update` kills only `ttyd` and leaves the `tmux` server + running `claude`
+  alive. Updates no longer drop your live sessions.
+
+## Updating — `tclaw`
+
+`tclaw` is a small control helper, symlinked into `/usr/local/bin`, that self-locates the
+checkout and auto-detects the service names (boxes use either `hub-*` or `terminalclaw-*`):
+
+```bash
+tclaw update    # git pull latest + restart the app (one-command self-update)
+tclaw status    # current commit + service health
+tclaw restart   # restart the dashboard + terminal services
+```
+
+Workflow: `git push` from your dev machine, then `tclaw update` on each box.
 
 ## Pieces
 
