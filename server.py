@@ -41,6 +41,11 @@ REGISTRY = os.path.join(HERE, "projects.json")
 # env to point at wherever your agent memory / notes live on this box.
 MEMORY_DIR = os.environ.get("HUB_MEMORY_DIR", os.path.join(HERE, "memory"))
 NOTES_DIR = os.environ.get("HUB_NOTES_DIR", os.path.join(HERE, "notes"))
+# Claude Code keeps its OWN per-directory memory under ~/.claude/projects/<slug>/memory
+# (slug = the project dir with non-alphanumerics turned into '-'). The dashboard and
+# the agent run as the same user, so this resolves to that store; we surface it
+# (read + edit) in the Memory tab alongside the user-written brief.
+CLAUDE_PROJECTS = os.environ.get("HUB_CLAUDE_PROJECTS", os.path.expanduser("~/.claude/projects"))
 HOST, PORT = "127.0.0.1", 7682
 
 # --- Layer 2: signed-cookie session gate ----------------------------------
@@ -160,11 +165,33 @@ def list_md(directory):
         return []
 
 
+def claude_mem_dir(project_dir):
+    """The folder where Claude Code stores its own memory for a given working
+    directory: ~/.claude/projects/<slug>/memory, slug = dir with non-alphanumerics
+    replaced by '-' (e.g. /home/wzachmorris -> -home-wzachmorris)."""
+    if not project_dir:
+        return None
+    slug = re.sub(r"[^A-Za-z0-9]", "-", project_dir)
+    return os.path.join(CLAUDE_PROJECTS, slug, "memory")
+
+
+def memory_search_dirs(proj):
+    """All dirs to search for a project's memory files, in priority order:
+    the project's own memory_dirs, then Claude's own memory store for the
+    project dir, then the global MEMORY_DIR."""
+    dirs = list(proj.get("memory_dirs", []))
+    cmd = claude_mem_dir(proj.get("dir", ""))
+    if cmd:
+        dirs.append(cmd)
+    dirs.append(MEMORY_DIR)
+    return dirs
+
+
 def project_dirs(reg, pid):
-    """Dirs to search for a project's memory: its own memory_dirs + the global MEMORY_DIR."""
+    """Dirs to search for a project's memory (incl. Claude's own memory store)."""
     for p in reg.get("projects", []):
         if p.get("id") == pid:
-            return list(p.get("memory_dirs", [])) + [MEMORY_DIR]
+            return memory_search_dirs(p)
     return [MEMORY_DIR]
 
 
@@ -490,6 +517,87 @@ def save_doc(scope, content, project=None, tab=None, index=None):
     os.replace(tmp, path)
 
 
+# --- Editable project memory (the force-read @-imports in CLAUDE.md) --------
+# These power the Memory tab's add/edit/remove. A project's "memory" array holds
+# .md basenames resolved against its memory_dirs + the global MEMORY_DIR; the
+# CLAUDE.md generator @-imports every one, so anything added here is force-read
+# by the agent on launch.
+
+def _slug_md(name):
+    """Turn a user-supplied name into a safe <slug>.md basename."""
+    stem = os.path.splitext(os.path.basename((name or "").strip()))[0]
+    stem = re.sub(r"[^A-Za-z0-9._-]+", "-", stem).strip("-._").lower()
+    if not stem:
+        raise ValueError("a name is required")
+    return stem[:60] + ".md"
+
+
+def _memory_dir_for(proj):
+    """Where to create new memory files: the project's first memory_dir if set,
+    else the global MEMORY_DIR."""
+    dirs = proj.get("memory_dirs") or []
+    return dirs[0] if dirs else MEMORY_DIR
+
+
+def _resolve_memory(reg, project, fname):
+    """Resolve a project memory basename to an existing on-disk path."""
+    fname = os.path.basename(fname or "")
+    if not fname or os.path.splitext(fname)[1].lower() not in EDITABLE_EXT:
+        raise ValueError("bad file")
+    proj = _find_project(reg, project)
+    dirs = memory_search_dirs(proj) if proj else [MEMORY_DIR]
+    for d in dirs:
+        p = os.path.join(d, fname)
+        if os.path.isfile(p):
+            return p
+    raise ValueError("file not found")
+
+
+def add_memory(project, name):
+    """Create a new .md memory file and link it to the project (force-read)."""
+    reg = load_registry()
+    proj = _find_project(reg, project)
+    if not proj:
+        raise ValueError("unknown project")
+    fname = _slug_md(name)
+    target = _memory_dir_for(proj)
+    os.makedirs(target, exist_ok=True)
+    path = os.path.join(target, fname)
+    if not os.path.exists(path):
+        with open(path, "w", encoding="utf-8") as f:
+            f.write("# {}\n\n".format(os.path.splitext(fname)[0]))
+    mem = proj.setdefault("memory", [])
+    if fname not in mem:
+        mem.append(fname)
+    write_registry(reg)
+    return fname
+
+
+def save_memory(project, file, content):
+    """Overwrite a linked memory file's content."""
+    if not isinstance(content, str):
+        raise ValueError("content required")
+    if len(content.encode("utf-8")) > DOC_MAX:
+        raise ValueError("content too large")
+    reg = load_registry()
+    path = _resolve_memory(reg, project, file)
+    tmp = path + ".tmp"
+    with open(tmp, "w", encoding="utf-8") as f:
+        f.write(content)
+    os.replace(tmp, path)
+
+
+def remove_memory(project, file):
+    """Unlink a memory file from a project (the file itself is not deleted)."""
+    reg = load_registry()
+    proj = _find_project(reg, project)
+    if not proj:
+        raise ValueError("unknown project")
+    fname = os.path.basename(file or "")
+    proj["memory"] = [m for m in proj.get("memory", []) if m != fname]
+    write_registry(reg)
+
+
 def browse_dir(dirpath):
     """List a directory for the file picker (dirs first, then files). Read-only;
     auth-gated at the route. Falls back to $HOME for a missing/blank dir."""
@@ -677,6 +785,49 @@ class Handler(BaseHTTPRequestHandler):
                 return self._send(500, {"error": str(e)})
             return self._send(200, {"ok": True})
 
+        if u.path == "/api/memory/add":
+            # Create + link a new force-read memory file for a project.
+            if not self._authed():
+                return self._send(401, {"error": "unauthorized"})
+            data = self._read_json()
+            if not isinstance(data, dict):
+                return self._send(400, {"error": "bad request"})
+            try:
+                fname = add_memory(data.get("project"), data.get("name"))
+            except ValueError as e:
+                return self._send(400, {"error": str(e)})
+            except Exception as e:
+                return self._send(500, {"error": str(e)})
+            return self._send(200, {"ok": True, "file": fname})
+
+        if u.path == "/api/memory/save":
+            if not self._authed():
+                return self._send(401, {"error": "unauthorized"})
+            data = self._read_json()
+            if not isinstance(data, dict):
+                return self._send(400, {"error": "bad request"})
+            try:
+                save_memory(data.get("project"), data.get("file"), data.get("content"))
+            except ValueError as e:
+                return self._send(400, {"error": str(e)})
+            except Exception as e:
+                return self._send(500, {"error": str(e)})
+            return self._send(200, {"ok": True})
+
+        if u.path == "/api/memory/remove":
+            if not self._authed():
+                return self._send(401, {"error": "unauthorized"})
+            data = self._read_json()
+            if not isinstance(data, dict):
+                return self._send(400, {"error": "bad request"})
+            try:
+                remove_memory(data.get("project"), data.get("file"))
+            except ValueError as e:
+                return self._send(400, {"error": str(e)})
+            except Exception as e:
+                return self._send(500, {"error": str(e)})
+            return self._send(200, {"ok": True})
+
         return self._send(404, {"error": "unknown route"})
 
     def do_GET(self):
@@ -717,6 +868,10 @@ class Handler(BaseHTTPRequestHandler):
                     files += list_md(d)
                 seen = set()
                 p["memory"] = [f for f in files if not (f in seen or seen.add(f))]
+                # Claude Code's own memory for this project's directory (what the
+                # agent has chosen to remember) — surfaced read/edit in the UI.
+                cmd = claude_mem_dir(p.get("dir", ""))
+                p["agent_memory"] = list_md(cmd) if cmd else []
             reg["generated"] = True
             return self._send(200, reg)
 

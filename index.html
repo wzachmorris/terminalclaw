@@ -99,6 +99,15 @@
   .tab .tabx:hover{opacity:1;color:var(--red);background:var(--panel2)}
   .tab.addtab{color:var(--muted);font-weight:600;padding:7px 11px}
   .tab.addtab:hover{color:var(--accent)}
+  /* project directory box (above the tab row) — folder name, tap/hover for full path */
+  .projdir{display:none;align-items:center;gap:8px;padding:8px 14px;background:var(--panel);
+           border-bottom:1px solid var(--border);color:var(--muted);font-size:12.5px;cursor:pointer;
+           white-space:nowrap;overflow:hidden;user-select:none}
+  .projdir:hover{color:var(--text)}
+  .projdir .ico{flex:none;opacity:.8}
+  .projdir code{background:var(--panel2);padding:1px 8px;border-radius:5px;color:var(--text);
+                font:12px ui-monospace,SFMono-Regular,Menlo,monospace;overflow:hidden;text-overflow:ellipsis}
+  .projdir .hint{opacity:.5;font-size:11px;flex:none}
   .docview{padding:20px 26px}
   .docview .docpath{color:var(--muted);font-size:12px;margin-bottom:12px;word-break:break-all}
   .docview pre.raw{background:var(--panel2);padding:14px;border-radius:8px;overflow:auto;
@@ -193,6 +202,7 @@
   <div class="scrim" onclick="toggleNav(false)"></div>
   <div class="sidebar" id="sidebar"></div>
   <div class="main">
+    <div class="projdir" id="projdir" onclick="toggleProjDir()"></div>
     <div class="tabs" id="tabbar"></div>
     <div class="content">
       <div class="pane" id="pane-terminal">
@@ -213,6 +223,7 @@ let PROJECTS = [];
 let GLOBALS = {essentials:[], credentials:[]};   // per-box reference-tab file lists (from projects.json)
 let CURRENT = null;
 let TAB = "terminal";
+let DIR_FULL = false;       // project-dir box: false = folder name, true = full path
 let DRAGGING = false;       // a card is being dragged — suppress poll-driven rebuilds
 let PALETTE_OPEN = false;   // the color popover is open — suppress full rebuilds
 let DRAG_ID = null;
@@ -220,6 +231,7 @@ let TITLE = "TerminalClaw";
 let COMPACT = localStorage.getItem("tc_compact")==="1";   // collapse inactive cards (per-device view pref)
 let ADDING = false;         // the new-project form is open — suppress poll-driven rebuilds
 const PALETTE = ["#f85149","#d29922","#3fb950","#58a6ff","#a371f7","#ec6cb9","#79c0ff","#8b949e"];
+const TOUCH = matchMedia("(pointer: coarse)").matches;   // touch device? -> disable card drag so taps switch projects
 
 function clock(){ const d=new Date(); document.getElementById("clock").textContent=d.toLocaleString(); }
 setInterval(clock,1000); clock();
@@ -268,14 +280,16 @@ function renderSidebar(){
     const c=document.createElement("div");
     c.className="card"+(CURRENT===p.id?" active":"")+(COMPACT&&CURRENT!==p.id?" compact":"");
     c.dataset.id=p.id;
-    c.draggable=true;
+    c.draggable=!TOUCH;                  // desktop: draggable to reorder; touch: off so taps register
     if(p.color) c.style.setProperty("--tag",p.color);
     c.onclick=()=>selectProject(p.id);
-    c.addEventListener("dragstart",onDragStart);
-    c.addEventListener("dragover",onDragOver);
-    c.addEventListener("dragleave",onDragLeave);
-    c.addEventListener("drop",onDrop);
-    c.addEventListener("dragend",onDragEnd);
+    if(!TOUCH){                          // drag-to-reorder is desktop-only (touch drag blocked taps)
+      c.addEventListener("dragstart",onDragStart);
+      c.addEventListener("dragover",onDragOver);
+      c.addEventListener("dragleave",onDragLeave);
+      c.addEventListener("drop",onDrop);
+      c.addEventListener("dragend",onDragEnd);
+    }
     const domains=(p.domains&&p.domains.length)?p.domains.join(", "):"<i>no public domain</i>";
     const dot=p.claude_running?'<span class="claude" title="Claude is running"></span>':'';
     c.innerHTML=`<div class="card-top">${dot}<h3>${esc(p.name)}</h3>`+
@@ -454,6 +468,7 @@ function selectProject(id){
   document.getElementById("termFrame").src="/terminal/?arg="+encodeURIComponent(id);
   renderMemory();
   renderTabs();
+  DIR_FULL=false; renderProjDir();   // show this project's directory box (collapsed)
   switchTab("terminal");          // reset to the terminal when switching projects
   toggleNav(false); // on mobile, close the drawer so the terminal is visible
 }
@@ -463,6 +478,20 @@ function toggleNav(force){
 }
 
 function currentProject(){ return PROJECTS.find(x=>x.id===CURRENT); }
+
+// --- project directory box (folder name; tap/hover reveals full path) -----
+function renderProjDir(){
+  const box=document.getElementById("projdir");
+  const p=currentProject();
+  if(!p || !p.dir){ box.style.display="none"; return; }
+  box.style.display="flex";
+  const full=p.dir;
+  const base=full.replace(/\/+$/,"").split("/").pop() || full;
+  box.title=full;                                   // desktop: native hover tooltip
+  box.innerHTML='<span class="ico">📁</span><code>'+esc(DIR_FULL?full:base)+'</code>'+
+                '<span class="hint">'+(DIR_FULL?'tap to collapse':'tap for full path')+'</span>';
+}
+function toggleProjDir(){ DIR_FULL=!DIR_FULL; renderProjDir(); }
 
 // Build the main tab bar for the current project: Terminal + Memory (always),
 // then its custom doc tabs, then a "+" to add one.
@@ -558,29 +587,76 @@ async function renderMemory(){
   const p=PROJECTS.find(x=>x.id===CURRENT);
   const pane=document.getElementById("pane-memory");
   if(!p){pane.innerHTML='<div class="empty">No project.</div>';return;}
-  const files=p.memory||[];
-  if(!files.length){pane.innerHTML='<div class="empty">No memory files linked to <b>'+p.name+'</b> yet.<br><br>Add filenames to its <code>memory</code> array in <code>projects.json</code>.</div>';return;}
-  let html='<div class="memlist"><div style="color:var(--muted);margin-bottom:10px">Memory linked to <b>'+p.name+'</b></div>';
-  for(const f of files){
-    html+=`<div class="file" onclick="openMemory('${f}')"><b>${f}</b><div class="desc" id="desc-${f.replace(/\W/g,'')}">…</div></div>`;
+  const brief=p.memory||[], agent=p.agent_memory||[];
+  let html='<div class="memlist">';
+  // Group 1 — your brief: force-read into the agent on launch
+  html+='<div class="globhd"><span>🧠 Your brief for <b>'+esc(p.name)+
+        '</b> — force-read by <code>claude</code> on launch</span>'+
+        '<button class="mini" onclick="addMemory()">+ Add memory</button></div>';
+  if(!brief.length){
+    html+='<div class="empty">No brief files yet. Click <b>+ Add memory</b> — it’s force-read by the agent.</div>';
+  }else{
+    for(const f of brief){
+      html+='<div class="file" onclick="openMemory(\''+f+'\')"><b>'+esc(f)+'</b>'+
+            '<span class="tabx" title="Unlink from memory" onclick="removeMemory(event,\''+f+'\')">×</span>'+
+            '<div class="desc" id="desc-b-'+f.replace(/\W/g,'')+'">…</div></div>';
+    }
   }
-  html+='</div>';
-  pane.innerHTML=html;
-  // lazily fetch descriptions
-  for(const f of files){
+  // Group 2 — what the agent itself has remembered (claude writes + auto-recalls)
+  html+='<div class="globhd" style="margin-top:20px"><span>🤖 What the agent remembers — written &amp; auto-recalled by <code>claude</code> itself</span></div>';
+  if(!agent.length){
+    html+='<div class="empty">The agent hasn’t saved any memories for this project yet.<br>Chat with it (type <code>claude</code> in the terminal) and watch this fill in.</div>';
+  }else{
+    for(const f of agent){
+      html+='<div class="file" onclick="openMemory(\''+f+'\')"><b>'+esc(f)+'</b>'+
+            '<div class="desc" id="desc-a-'+f.replace(/\W/g,'')+'">…</div></div>';
+    }
+  }
+  pane.innerHTML=html+'</div>';
+  // lazily fetch descriptions (group prefix avoids id collisions across groups)
+  const fetchDesc=async(f,pre)=>{
     const r=await fetch("/api/memory?project="+encodeURIComponent(CURRENT)+"&file="+encodeURIComponent(f));
     if(r.ok){const t=(await r.json()).content; const m=t.match(/description:\s*(.*)/);
-      const el=document.getElementById("desc-"+f.replace(/\W/g,''));
-      if(el) el.textContent=m?m[1].trim():"";}
-  }
+      const el=document.getElementById("desc-"+pre+"-"+f.replace(/\W/g,''));
+      if(el) el.textContent=m?m[1].trim().replace(/^["']|["']$/g,""):"";}
+  };
+  for(const f of brief) fetchDesc(f,"b");
+  for(const f of agent) fetchDesc(f,"a");
 }
 
 async function openMemory(f){
   const r=await fetch("/api/memory?project="+encodeURIComponent(CURRENT)+"&file="+encodeURIComponent(f));
   const pane=document.getElementById("pane-memory");
-  if(!r.ok){pane.innerHTML='<div class="empty">Could not load '+f+'</div>';return;}
+  if(!r.ok){pane.innerHTML='<div class="empty">Could not load '+esc(f)+'</div>';return;}
   const t=(await r.json()).content;
-  pane.innerHTML='<span class="back" onclick="renderMemory()">← back to list</span><div class="md">'+mdToHtml(t)+'</div>';
+  // reuse the shared doc viewer so memory gets an Edit button; saving routes to
+  // /api/memory/save via the "memory" scope (see docSave).
+  showDoc("pane-memory",{file:f,content:t,kind:"markdown"},
+          {scope:"memory",project:CURRENT,file:f},()=>renderMemory());
+}
+
+// Create a new force-read memory file (added to the project's memory[] -> the
+// CLAUDE.md generator @-imports it), then drop straight into the editor.
+async function addMemory(){
+  const name=prompt("Name this memory file (e.g. preferences):");
+  if(name===null||!name.trim()) return;
+  let r,j;
+  try{ r=await fetch("/api/memory/add",{method:"POST",headers:{"Content-Type":"application/json"},
+       body:JSON.stringify({project:CURRENT,name:name})}); j=await r.json().catch(()=>({})); }
+  catch(e){ alert("Network error."); return; }
+  if(!r.ok){ alert((j&&j.error)||"Could not add memory."); return; }
+  await loadProjects();
+  if(j.file){ await openMemory(j.file); docEdit(); } else { renderMemory(); }
+}
+async function removeMemory(ev,f){
+  ev.stopPropagation();
+  if(!confirm('Unlink "'+f+'" from this project’s memory? (the file itself is not deleted)')) return;
+  let r;
+  try{ r=await fetch("/api/memory/remove",{method:"POST",headers:{"Content-Type":"application/json"},
+       body:JSON.stringify({project:CURRENT,file:f})}); }
+  catch(e){ return; }
+  if(!r.ok) return;
+  await loadProjects(); renderMemory();
 }
 
 // ⭐ Essentials + 🔐 Credentials — per-box reference tabs. The file list lives
@@ -669,9 +745,13 @@ function docCancel(){ showDoc(DOCCTX.paneId,DOCCTX.d,DOCCTX.save,DOCCTX.back); }
 async function docSave(){
   const content=document.getElementById("docEditor").value;
   const err=document.getElementById("docErr");
-  const body=Object.assign({content:content},DOCCTX.save);
+  const sv=DOCCTX.save;
+  const isMem=sv&&sv.scope==="memory";
+  const url=isMem?"/api/memory/save":"/api/doc/save";
+  const body=isMem?{project:sv.project,file:sv.file,content:content}
+                  :Object.assign({content:content},sv);
   let r,j;
-  try{ r=await fetch("/api/doc/save",{method:"POST",headers:{"Content-Type":"application/json"},
+  try{ r=await fetch(url,{method:"POST",headers:{"Content-Type":"application/json"},
        body:JSON.stringify(body)}); j=await r.json().catch(()=>({})); }
   catch(e){ err.textContent="Network error."; return; }
   if(!r.ok){ err.textContent=(j&&j.error)||"Could not save."; return; }

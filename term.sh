@@ -46,19 +46,28 @@ fi
 
 DIR="$(reg_field "$PROJ" dir)"
 [[ -z "$DIR" || ! -d "$DIR" ]] && DIR="$HOME"
+NAME="$(reg_field "$PROJ" name)"; [[ -z "$NAME" ]] && NAME="$PROJ"
 CMD="$(reg_field "$PROJ" command)"
 SESSION="hub-${PROJ}"
 
+# Build this project's CLAUDE.md (agent brief) up front, so it's in place before
+# the shell starts. The `claude` wrapper (agent.bashrc) also refreshes it on each
+# launch, so it always reflects the project's currently-attached tabs.
+python3 /opt/terminalclaw/gen_claude_md.py "$PROJ" >/dev/null 2>&1 || true
+
 clear
-echo "Project: $PROJ"
-echo "Dir:     $DIR"
+echo "🐾 ${NAME} — project agent"
+echo "   dir:    ${DIR}"
+echo "   brief:  CLAUDE.md (auto-built from this project's tabs)"
+echo "   tmux:   ${SESSION}   (Ctrl-b d to detach)"
 if [[ -n "$CMD" ]]; then
-  echo "Command: $CMD"
-  echo "Session: $SESSION   (Ctrl-b d to detach)"
+  echo "   run:    ${CMD}"
   echo
-  exec tmux new-session -A -s "$SESSION" -c "$DIR" "$CMD"
+  exec tmux new-session -A -s "$SESSION" -e "TC_PROJECT=$PROJ" -c "$DIR" "$CMD"
 else
-  echo "Session: $SESSION   (type 'claude' to open an agent; Ctrl-b d to detach)"
   echo
-  exec tmux new-session -A -s "$SESSION" -c "$DIR"
+  echo "   type 'claude' to start — it reads this project's memory first."
+  echo
+  exec tmux new-session -A -s "$SESSION" -e "TC_PROJECT=$PROJ" -c "$DIR" \
+       "bash --rcfile /opt/terminalclaw/agent.bashrc -i"
 fi
