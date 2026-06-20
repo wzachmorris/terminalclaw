@@ -11,7 +11,14 @@ set -uo pipefail
 # Self-locate the checkout (works at /opt/terminalclaw, /root/hub, anywhere) by
 # resolving this script's real path through the /usr/local/bin symlink.
 DIR="$(cd "$(dirname "$(readlink -f "$0")")" && pwd)"
-SERVICES="hub-dashboard hub-ttyd"
+# Detect the dashboard + ttyd service names — the fleet uses two conventions
+# (hub-* on some boxes, terminalclaw-* on others).
+SERVICES=""
+for s in hub-dashboard terminalclaw-dashboard hub-ttyd terminalclaw-ttyd; do
+  systemctl cat "$s.service" >/dev/null 2>&1 && SERVICES="$SERVICES $s"
+done
+SERVICES="${SERVICES# }"
+[ -z "$SERVICES" ] && SERVICES="hub-dashboard hub-ttyd"
 
 # Re-run as root if we aren't already (git pull + systemctl need it).
 if [ "$(id -u)" -ne 0 ]; then exec sudo "$0" "$@"; fi
