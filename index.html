@@ -182,6 +182,21 @@
   .pane{position:absolute;inset:0;overflow:auto;padding:0}
   .pane.hidden{display:none}
   #termFrame{width:100%;height:100%;border:0;background:#000}
+  /* terminal pane stacks the iframe above the mobile tap-bar */
+  #pane-terminal{display:flex;flex-direction:column;overflow:hidden}
+  #pane-terminal #termFrame{flex:1 1 auto;height:auto;min-height:0}
+  .keybar{flex:0 0 auto;display:flex;gap:6px;align-items:center;padding:6px 8px;
+          background:var(--panel);border-top:1px solid var(--border);
+          overflow-x:auto;white-space:nowrap;-webkit-overflow-scrolling:touch}
+  .keybar button{flex:0 0 auto;min-width:42px;height:38px;padding:0 11px;border-radius:8px;
+          border:1px solid var(--border);background:var(--panel2);color:var(--text);
+          font-size:15px;line-height:1;cursor:pointer;user-select:none;touch-action:manipulation}
+  .keybar button:active{background:var(--accent);color:#0d1117;border-color:var(--accent)}
+  .keybar .kauto{font-size:12.5px;font-weight:600}
+  .keybar .kpaste{font-size:12.5px;font-weight:600}
+  .keybar .kint{color:var(--red)}
+  .keybar #mouseBtn.on{background:var(--accent);color:#0d1117;border-color:var(--accent)}
+  .keybar .ksep{flex:0 0 auto;width:1px;height:22px;background:var(--border);margin:0 2px}
   .md{padding:20px 26px;max-width:900px}
   .md h1,.md h2,.md h3{border-bottom:1px solid var(--border);padding-bottom:4px}
   .md code{background:var(--panel2);padding:1px 5px;border-radius:4px;font-size:12.5px}
@@ -230,6 +245,28 @@
     <div class="content">
       <div class="pane" id="pane-terminal">
         <iframe id="termFrame" src="about:blank"></iframe>
+        <!-- mobile tap-bar: keys a phone keyboard can't reliably send into
+             an interactive prompt (menus, Shift-Tab auto mode, Ctrl-C, …) -->
+        <div class="keybar" id="keybar">
+          <button onclick="sendKey('up')" title="Up">↑</button>
+          <button onclick="sendKey('down')" title="Down">↓</button>
+          <span class="ksep"></span>
+          <button onclick="sendKey('1')">1</button>
+          <button onclick="sendKey('2')">2</button>
+          <button onclick="sendKey('3')">3</button>
+          <button onclick="sendKey('4')">4</button>
+          <button onclick="sendKey('5')">5</button>
+          <span class="ksep"></span>
+          <button onclick="sendKey('esc')" title="Escape / cancel">Esc</button>
+          <span class="ksep"></span>
+          <button onclick="sendKey('tab')" title="Tab">⇥</button>
+          <button class="kauto" onclick="sendKey('btab')" title="Shift-Tab — cycle auto-accept / plan mode">⇧⇥ Auto</button>
+          <span class="ksep"></span>
+          <button class="kint" onclick="sendKey('ctrl-c')" title="Interrupt (Ctrl-C)">^C</button>
+          <span class="ksep"></span>
+          <button class="kpaste" onclick="pasteToTerm()" title="Paste clipboard into the terminal">📋 Paste</button>
+          <button id="mouseBtn" onclick="toggleMouse()" title="Scroll mode — swipe/wheel to scroll terminal history (off = drag to select &amp; copy)">📜</button>
+        </div>
       </div>
       <div class="pane hidden" id="pane-memory">
         <div class="empty">Select a project to view its memory &amp; context.</div>
@@ -410,6 +447,43 @@ async function saveLayout(body){
   try{ await fetch("/api/layout",{method:"POST",headers:{"Content-Type":"application/json"},
        body:JSON.stringify(body)}); }
   catch(e){ console.warn("layout save failed",e); }
+}
+
+// Mobile tap-bar: inject one whitelisted key into the current project's tmux
+// session (server-side send-keys) so phone users can drive interactive prompts.
+async function sendKey(key){
+  if(!CURRENT) return;
+  try{ await fetch("/api/term/key",{method:"POST",headers:{"Content-Type":"application/json"},
+       body:JSON.stringify({project:CURRENT,key})}); }
+  catch(e){ /* best-effort; the key either lands in tmux or it doesn't */ }
+}
+async function sendPaste(text){
+  if(!CURRENT || !text) return;
+  try{ await fetch("/api/term/paste",{method:"POST",headers:{"Content-Type":"application/json"},
+       body:JSON.stringify({project:CURRENT,text})}); }
+  catch(e){ /* best-effort */ }
+}
+// Read the system clipboard and bracketed-paste it into the terminal. Falls
+// back to a manual prompt when the browser blocks clipboard reads (e.g. iOS).
+async function pasteToTerm(){
+  if(!CURRENT) return;
+  let text=null;
+  try{ text=await navigator.clipboard.readText(); }
+  catch(e){ text=window.prompt("Paste here, then OK — sends into the terminal:")||""; }
+  sendPaste(text);
+}
+// Toggle tmux mouse/scroll mode; the button tracks state (client is the only
+// thing that flips it, so its class is the source of truth).
+async function toggleMouse(){
+  if(!CURRENT) return;
+  const btn=document.getElementById("mouseBtn");
+  const want=!btn.classList.contains("on");
+  try{
+    const r=await fetch("/api/term/mouse",{method:"POST",headers:{"Content-Type":"application/json"},
+      body:JSON.stringify({project:CURRENT,on:want})});
+    const j=await r.json();
+    btn.classList.toggle("on", j.mouse==="on");
+  }catch(e){ /* leave button as-is on failure */ }
 }
 
 // --- editable hub title (persists to projects.json 'title') ---------------
@@ -613,6 +687,7 @@ function selectProject(id){
   renderSidebar();
   // load per-project terminal session
   document.getElementById("termFrame").src="/terminal/?arg="+encodeURIComponent(id);
+  const mb=document.getElementById("mouseBtn"); if(mb) mb.classList.remove("on"); // per-session
   renderMemory();
   renderTabs();
   DIR_FULL=false; renderProjDir();   // show this project's directory box (collapsed)

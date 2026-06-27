@@ -626,6 +626,70 @@ def remove_memory(project, file):
     write_registry(reg)
 
 
+# Keys the mobile tap-bar may inject into a project's terminal. A fixed
+# whitelist (mapped to tmux key names) so a phone can answer interactive
+# prompts — arrows, Enter, numbers, Space, Tab, Shift-Tab (auto-accept/plan
+# mode), Ctrl-C — that a soft keyboard can't reliably send.
+TERM_KEYS = {
+    "up": "Up", "down": "Down", "left": "Left", "right": "Right",
+    "enter": "Enter", "esc": "Escape", "space": "Space",
+    "tab": "Tab", "btab": "BTab", "ctrl-c": "C-c",
+    **{d: d for d in "0123456789"},
+}
+
+
+def term_send_key(project, key):
+    """Inject one whitelisted keystroke into project <id>'s tmux session.
+
+    The session name is derived from the registry (hub-<id>), never from the
+    client, and the key must be in TERM_KEYS — so this can only ever send a
+    known control key to a known session, not arbitrary input or shell.
+    """
+    reg = load_registry()
+    proj = _find_project(reg, (project or "").strip())
+    if not proj:
+        raise ValueError("unknown project")
+    tok = TERM_KEYS.get((key or "").strip().lower())
+    if tok is None:
+        raise ValueError("key not allowed")
+    subprocess.run(["tmux", "send-keys", "-t", "hub-" + proj["id"], tok],
+                   check=False, timeout=5)
+
+
+def term_paste(project, text):
+    """Paste clipboard text into project <id>'s terminal as a bracketed paste,
+    so multi-line content lands as one block (and Claude's prompt / the shell
+    won't auto-run each line). Text is length-capped; the session is derived
+    from the registry, never the client."""
+    reg = load_registry()
+    proj = _find_project(reg, (project or "").strip())
+    if not proj:
+        raise ValueError("unknown project")
+    if not isinstance(text, str):
+        raise ValueError("text required")
+    text = text[:100000]
+    if not text:
+        return
+    session = "hub-" + proj["id"]
+    subprocess.run(["tmux", "set-buffer", "-b", "tcpaste", "--", text],
+                   check=False, timeout=5)
+    subprocess.run(["tmux", "paste-buffer", "-p", "-d", "-b", "tcpaste",
+                    "-t", session], check=False, timeout=5)
+
+
+def term_mouse(project, on):
+    """Set tmux mouse mode on/off for project <id>'s session — lets a phone
+    swipe-scroll the terminal history. Per-session; returns the new state."""
+    reg = load_registry()
+    proj = _find_project(reg, (project or "").strip())
+    if not proj:
+        raise ValueError("unknown project")
+    state = "on" if on else "off"
+    subprocess.run(["tmux", "set-option", "-t", "hub-" + proj["id"],
+                    "mouse", state], check=False, timeout=5)
+    return state
+
+
 def browse_dir(dirpath):
     """List a directory for the file picker (dirs first, then files). Read-only;
     auth-gated at the route. Falls back to $HOME for a missing/blank dir."""
@@ -724,6 +788,52 @@ class Handler(BaseHTTPRequestHandler):
             except Exception as e:
                 return self._send(500, {"error": str(e)})
             return self._send(200, {"ok": True})
+
+        if u.path == "/api/term/key":
+            # Inject a single whitelisted key into a project's terminal — the
+            # mobile tap-bar's backend. Auth-gated; key + session validated.
+            if not self._authed():
+                return self._send(401, {"error": "unauthorized"})
+            data = self._read_json()
+            if not isinstance(data, dict):
+                return self._send(400, {"error": "bad request"})
+            try:
+                term_send_key(data.get("project"), data.get("key"))
+            except ValueError as e:
+                return self._send(400, {"error": str(e)})
+            except Exception as e:
+                return self._send(500, {"error": str(e)})
+            return self._send(200, {"ok": True})
+
+        if u.path == "/api/term/paste":
+            # Bracketed-paste clipboard text into a project's terminal.
+            if not self._authed():
+                return self._send(401, {"error": "unauthorized"})
+            data = self._read_json()
+            if not isinstance(data, dict):
+                return self._send(400, {"error": "bad request"})
+            try:
+                term_paste(data.get("project"), data.get("text"))
+            except ValueError as e:
+                return self._send(400, {"error": str(e)})
+            except Exception as e:
+                return self._send(500, {"error": str(e)})
+            return self._send(200, {"ok": True})
+
+        if u.path == "/api/term/mouse":
+            # Toggle tmux mouse/scroll mode for a project's session.
+            if not self._authed():
+                return self._send(401, {"error": "unauthorized"})
+            data = self._read_json()
+            if not isinstance(data, dict):
+                return self._send(400, {"error": "bad request"})
+            try:
+                state = term_mouse(data.get("project"), bool(data.get("on")))
+            except ValueError as e:
+                return self._send(400, {"error": str(e)})
+            except Exception as e:
+                return self._send(500, {"error": str(e)})
+            return self._send(200, {"ok": True, "mouse": state})
 
         if u.path == "/api/project":
             # Create a new project tab (name + directory). Auth-gated + validated.
