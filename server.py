@@ -321,10 +321,12 @@ def write_registry(reg):
     return reg
 
 
-def add_project(name, directory):
-    """Append a new project (name + existing directory) to the registry.
+def add_project(name, directory, create=False):
+    """Append a new project (name + directory) to the registry.
 
-    Generates a unique slug id from the name; other fields default empty.
+    With create=True a missing directory is created (mkdir -p); otherwise a
+    missing directory raises FileNotFoundError so the caller can offer to make
+    it. Generates a unique slug id from the name; other fields default empty.
     Returns the new id. Raises ValueError on invalid input.
     """
     name = (name or "").strip()[:60]
@@ -336,7 +338,13 @@ def add_project(name, directory):
     if not os.path.isabs(directory):
         raise ValueError("directory must be an absolute path")
     if not os.path.isdir(directory):
-        raise ValueError("directory not found: " + directory)
+        if not create:
+            raise FileNotFoundError(directory)
+        try:
+            os.makedirs(directory, exist_ok=True)
+        except OSError as e:
+            raise ValueError("could not create directory: " +
+                             (e.strerror or str(e)))
     reg = load_registry()
     existing = {p.get("id") for p in reg.get("projects", [])}
     base = re.sub(r"[^a-z0-9]+", "-", name.lower()).strip("-") or "tab"
@@ -703,7 +711,11 @@ class Handler(BaseHTTPRequestHandler):
             if not isinstance(data, dict):
                 return self._send(400, {"error": "bad request"})
             try:
-                pid = add_project(data.get("name"), data.get("dir"))
+                pid = add_project(data.get("name"), data.get("dir"),
+                                  create=bool(data.get("create")))
+            except FileNotFoundError as e:
+                return self._send(400, {"error": "directory not found: " + str(e),
+                                        "missing_dir": True})
             except ValueError as e:
                 return self._send(400, {"error": str(e)})
             except Exception as e:

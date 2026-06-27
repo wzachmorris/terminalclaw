@@ -90,6 +90,10 @@
   .addform button.ghost{background:transparent;color:var(--muted);font-weight:400}
   .addform button.ghost:hover{border-color:var(--accent);color:var(--text)}
   .adderr{color:var(--red);font-size:12px;margin-top:7px;min-height:0}
+  .adderr code{color:var(--text);background:var(--bg);padding:1px 4px;border-radius:4px}
+  .adderr button.mkdir{display:block;width:100%;margin-top:7px;padding:7px;border-radius:6px;
+                       border:1px solid var(--accent);background:var(--accent);color:#0d1117;
+                       font-weight:600;font-size:12px;cursor:pointer}
   .main{display:flex;flex-direction:column;overflow:hidden}
   .tabs{display:flex;gap:4px;padding:10px 14px 0;border-bottom:1px solid var(--border);background:var(--panel)}
   .tab{padding:7px 14px;border-radius:7px 7px 0 0;cursor:pointer;color:var(--muted);font-size:13px;
@@ -433,7 +437,7 @@ function openAdd(){
   document.getElementById("addName").focus();
 }
 function cancelAdd(){ ADDING=false; renderSidebar(); }
-async function createProject(){
+async function createProject(create=false){
   const name=document.getElementById("addName").value.trim();
   const dir=document.getElementById("addDir").value.trim();
   const err=document.getElementById("addErr");
@@ -441,10 +445,18 @@ async function createProject(){
   let r,j;
   try{
     r=await fetch("/api/project",{method:"POST",headers:{"Content-Type":"application/json"},
-      body:JSON.stringify({name,dir})});
+      body:JSON.stringify({name,dir,create})});
     j=await r.json();
   }catch(e){ err.textContent="Network error."; return; }
-  if(!r.ok){ err.textContent=(j&&j.error)||"Could not create tab."; return; }
+  if(!r.ok){
+    if(j&&j.missing_dir){
+      // Directory doesn't exist yet — offer to create it, then retry.
+      err.innerHTML='Directory <code>'+esc(dir)+'</code> doesn’t exist. '+
+        '<button type="button" class="mkdir" onclick="createProject(true)">Create it &amp; add project</button>';
+      return;
+    }
+    err.textContent=(j&&j.error)||"Could not create tab."; return;
+  }
   ADDING=false;
   await loadProjects();
   if(j.id) selectProject(j.id);
