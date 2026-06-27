@@ -273,16 +273,21 @@ def claude_sessions():
 HEX_COLOR = re.compile(r"^#[0-9a-fA-F]{6}$")
 
 
-def save_layout(order, colors, title=None):
-    """Persist tab order, color tags, and the hub title into projects.json
-    (atomic, validated).
+def save_layout(order, colors, title=None, favicon=None, projects_root=None):
+    """Persist tab order, color tags, the hub title, the favicon emoji, and the
+    default projects directory into projects.json (atomic, validated).
 
-    order  : list of project ids defining the new top-to-bottom order. Unknown
-             ids are ignored; known ids not listed keep their relative order
-             after the listed ones (so a partial order is safe).
-    colors : {id: "#rrggbb" | null} — null/empty clears the tag. Only valid
-             6-digit hex is accepted; anything else is ignored.
-    title  : new dashboard title (string, trimmed, max 80 chars; ignored if blank).
+    order   : list of project ids defining the new top-to-bottom order. Unknown
+              ids are ignored; known ids not listed keep their relative order
+              after the listed ones (so a partial order is safe).
+    colors  : {id: "#rrggbb" | null} — null/empty clears the tag. Only valid
+              6-digit hex is accepted; anything else is ignored.
+    title   : new dashboard title (string, trimmed, max 80 chars; ignored if blank).
+    favicon : emoji shown in the browser tab (string, max 16 chars to allow
+              multi-codepoint emoji; blank clears it back to the default).
+    projects_root : default absolute directory new projects start in; only the
+              add-project field is pre-filled with it, paths are never rewritten.
+              Blank clears it; a relative path is ignored.
     Returns the rewritten registry dict.
     """
     reg = load_registry()
@@ -292,6 +297,21 @@ def save_layout(order, colors, title=None):
         t = title.strip()[:80]
         if t:
             reg["title"] = t
+
+    if isinstance(favicon, str):
+        fav = favicon.strip()[:16]
+        if fav:
+            reg["favicon"] = fav
+        else:
+            reg.pop("favicon", None)
+
+    if isinstance(projects_root, str):
+        root = os.path.expanduser(projects_root.strip())
+        if root and os.path.isabs(root):
+            reg["projects_root"] = root.rstrip("/") or "/"
+        elif not root:
+            reg.pop("projects_root", None)
+        # a non-empty relative path is ignored (the UI only sends absolute)
 
     if isinstance(order, list):
         rank = {pid: i for i, pid in enumerate(order) if isinstance(pid, str)}
@@ -698,7 +718,9 @@ class Handler(BaseHTTPRequestHandler):
             if not isinstance(data, dict):
                 return self._send(400, {"error": "bad request"})
             try:
-                save_layout(data.get("order"), data.get("colors"), data.get("title"))
+                save_layout(data.get("order"), data.get("colors"),
+                            data.get("title"), data.get("favicon"),
+                            data.get("projects_root"))
             except Exception as e:
                 return self._send(500, {"error": str(e)})
             return self._send(200, {"ok": True})

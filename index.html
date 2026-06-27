@@ -4,6 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>TerminalClaw</title>
+<link rel="icon" id="favLink" href="data:image/svg+xml,%3Csvg%20xmlns='http://www.w3.org/2000/svg'%20viewBox='0%200%20100%20100'%3E%3Ctext%20y='.9em'%20font-size='90'%3E%F0%9F%A6%80%3C/text%3E%3C/svg%3E">
 <style>
   :root{
     --bg:#0d1117; --panel:#161b22; --panel2:#1c2230; --border:#2a3340;
@@ -72,6 +73,11 @@
   .card.compact .domains,.card.compact .pills{display:none}
   .card.compact .card-top{gap:7px}
   /* click-to-rename header title */
+  /* click-to-change browser-tab icon */
+  .favbtn{cursor:pointer;font-size:16px;line-height:1;border-radius:5px;padding:2px 4px;user-select:none}
+  .favbtn:hover{background:var(--panel2)}
+  .favin{width:3.2em;font-size:15px;padding:2px 4px;background:var(--bg);border:1px solid var(--accent);
+         border-radius:5px;color:var(--text);outline:none;text-align:center}
   #hubTitle{cursor:text;border-radius:5px;padding:1px 6px;margin:0 -2px;outline:none}
   #hubTitle:hover{background:var(--panel2)}
   #hubTitle.editing{background:var(--panel2);box-shadow:inset 0 0 0 1px var(--accent);cursor:text}
@@ -90,6 +96,18 @@
   .addform button.ghost{background:transparent;color:var(--muted);font-weight:400}
   .addform button.ghost:hover{border-color:var(--accent);color:var(--text)}
   .adderr{color:var(--red);font-size:12px;margin-top:7px;min-height:0}
+  .addroot{font-size:11.5px;color:var(--muted);margin-top:9px;border-top:1px solid var(--border);padding-top:8px}
+  .addroot code{color:var(--text);background:var(--bg);padding:1px 4px;border-radius:4px}
+  .addroot a{color:var(--accent);cursor:pointer}
+  .addroot a:hover{text-decoration:underline}
+  .rootin{width:100%;box-sizing:border-box;padding:6px;background:var(--bg);border:1px solid var(--accent);
+          border-radius:6px;color:var(--text);font-size:12.5px}
+  .rootsel{width:100%;box-sizing:border-box;padding:6px;background:var(--bg);border:1px solid var(--accent);
+           border-radius:6px;color:var(--text);font-size:12.5px}
+  .rootload{color:var(--muted);font-size:12px}
+  .rootsave{margin-top:6px;padding:5px 12px;border-radius:6px;border:1px solid var(--accent);
+            background:var(--accent);color:#0d1117;font-weight:600;font-size:12px;cursor:pointer}
+  .rooterr{color:var(--red);font-size:11px;margin-top:4px}
   .adderr code{color:var(--text);background:var(--bg);padding:1px 4px;border-radius:4px}
   .adderr button.mkdir{display:block;width:100%;margin-top:7px;padding:7px;border-radius:6px;
                        border:1px solid var(--accent);background:var(--accent);color:#0d1117;
@@ -195,6 +213,7 @@
 <header>
   <button class="navtoggle" onclick="toggleNav()">☰ Projects</button>
   <span class="dot"></span>
+  <span id="favBtn" class="favbtn" title="Click to change the browser-tab icon" onclick="editFavicon()">🦀</span>
   <h1 id="hubTitle" title="Click to rename" onclick="editTitle()">TerminalClaw</h1>
   <span class="spacer"></span>
   <span id="clock" style="color:var(--muted);font-size:12px"></span>
@@ -232,6 +251,7 @@ let DRAGGING = false;       // a card is being dragged — suppress poll-driven 
 let PALETTE_OPEN = false;   // the color popover is open — suppress full rebuilds
 let DRAG_ID = null;
 let TITLE = "TerminalClaw";
+let PROJECTS_ROOT = "";      // default dir new projects start in (pre-fill only)
 let COMPACT = localStorage.getItem("tc_compact")==="1";   // collapse inactive cards (per-device view pref)
 let ADDING = false;         // the new-project form is open — suppress poll-driven rebuilds
 const PALETTE = ["#f85149","#d29922","#3fb950","#58a6ff","#a371f7","#ec6cb9","#79c0ff","#8b949e"];
@@ -245,6 +265,8 @@ async function loadProjects(){
   const r = await fetch("/api/projects");
   const data = await r.json();
   setTitle(data.title);
+  setFavicon(data.favicon);
+  PROJECTS_ROOT = data.projects_root || "";
   GLOBALS.essentials = data.essentials || [];
   GLOBALS.credentials = data.credentials || [];
   const prev = PROJECTS.map(p=>p.id).join(",");
@@ -412,6 +434,43 @@ function commitTitle(){
   h.textContent=TITLE;
 }
 
+// --- editable browser-tab icon (persists to projects.json 'favicon') ------
+let FAVICON = "🦀";
+function faviconURI(emoji){
+  const svg='<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100">'+
+            '<text y=".9em" font-size="90">'+emoji+'</text></svg>';
+  return 'data:image/svg+xml,'+encodeURIComponent(svg);
+}
+function setFavicon(emoji){
+  FAVICON=(emoji&&String(emoji).trim())||"🦀";
+  document.getElementById("favLink").href=faviconURI(FAVICON);
+  const b=document.getElementById("favBtn");
+  if(b && b.tagName==="SPAN") b.textContent=FAVICON;   // don't clobber mid-edit
+}
+function editFavicon(){
+  const b=document.getElementById("favBtn");
+  if(b.tagName!=="SPAN") return;                        // already editing
+  const inp=document.createElement("input");
+  inp.id="favBtn"; inp.className="favin"; inp.value=FAVICON; inp.maxLength=16;
+  inp.title="Type an emoji, then Enter (blank = default)";
+  b.replaceWith(inp); inp.focus(); inp.select();
+  const done=commit=>{
+    const v=inp.value.trim().slice(0,16);
+    const span=document.createElement("span");
+    span.id="favBtn"; span.className="favbtn";
+    span.title="Click to change the browser-tab icon";
+    span.setAttribute("onclick","editFavicon()");
+    span.textContent=commit?(v||"🦀"):FAVICON;
+    inp.replaceWith(span);
+    if(commit && v!==FAVICON){ setFavicon(v); saveLayout({favicon:v}); }
+  };
+  inp.addEventListener("keydown",e=>{
+    if(e.key==="Enter"){ e.preventDefault(); done(true); }
+    else if(e.key==="Escape"){ e.preventDefault(); done(false); }
+  });
+  inp.addEventListener("blur",()=>done(true));
+}
+
 // --- collapse inactive cards ----------------------------------------------
 function toggleCompact(){
   COMPACT=!COMPACT;
@@ -424,12 +483,15 @@ function toggleCompact(){
 function openAdd(){
   ADDING=true;
   const wrap=document.getElementById("addRow");
+  const prefill=PROJECTS_ROOT?esc(PROJECTS_ROOT+"/"):"";
   wrap.innerHTML=`<div class="addform">
     <input id="addName" placeholder="Tab name" maxlength="60" autocomplete="off">
-    <input id="addDir" placeholder="Directory, e.g. /home/wzachmorris/myapp" autocomplete="off">
+    <input id="addDir" placeholder="Directory, e.g. /home/wzachmorris/myapp" autocomplete="off" value="${prefill}">
     <div class="addbtns"><button onclick="createProject()">Create</button>
       <button class="ghost" onclick="cancelAdd()">Cancel</button></div>
-    <div class="adderr" id="addErr"></div></div>`;
+    <div class="adderr" id="addErr"></div>
+    <div class="addroot" id="addRoot"></div></div>`;
+  renderAddRoot();
   ["addName","addDir"].forEach(id=>document.getElementById(id).addEventListener("keydown",e=>{
     if(e.key==="Enter"){ e.preventDefault(); createProject(); }
     else if(e.key==="Escape"){ e.preventDefault(); cancelAdd(); }
@@ -437,6 +499,79 @@ function openAdd(){
   document.getElementById("addName").focus();
 }
 function cancelAdd(){ ADDING=false; renderSidebar(); }
+
+// The "default location" control inside the add-project form. Sets PROJECTS_ROOT
+// (persisted hub-wide); the directory field is only ever pre-filled from it.
+function renderAddRoot(){
+  const el=document.getElementById("addRoot");
+  if(!el) return;
+  el.innerHTML=PROJECTS_ROOT
+    ? `New projects open in <code>${esc(PROJECTS_ROOT)}/</code> · `+
+      `<a onclick="editProjectsRoot()">change</a>`
+    : `<a onclick="editProjectsRoot()">Set a default location…</a>`;
+}
+// Dropdown of candidate roots — home + its sub-folders (live from /api/browse),
+// plus "none" to clear and "Custom path…" to type one freely.
+async function editProjectsRoot(){
+  const el=document.getElementById("addRoot");
+  el.innerHTML='<div class="rootload">Loading folders…</div>';
+  // The server runs as root, so ~ is useless here — build candidates from where
+  // projects actually live: the parent dirs of existing projects + /home + /opt.
+  const seen=new Set(), cands=[];
+  const add=p=>{ if(p && !seen.has(p)){ seen.add(p); cands.push(p); } };
+  (PROJECTS||[]).map(p=>p.dir).filter(Boolean).forEach(d=>
+    add(d.replace(/\/+$/,"").replace(/\/[^/]+$/,"")||"/"));   // each project's parent
+  try{
+    const r=await fetch("/api/browse?dir="+encodeURIComponent("/home"));
+    const d=await r.json();
+    (d.entries||[]).filter(e=>e.is_dir && !e.name.startsWith(".")).forEach(e=>add(e.path));
+  }catch(e){ /* fall back to whatever we have + custom */ }
+  add("/opt");
+  if(PROJECTS_ROOT) add(PROJECTS_ROOT);                       // keep current selectable
+  cands.sort();
+  const opts=cands.map(p=>
+    `<option value="${esc(p)}"${p===PROJECTS_ROOT?" selected":""}>📁 ${esc(p)}</option>`).join("");
+  el.innerHTML=
+    `<select id="rootSel" class="rootsel" onchange="rootSelChanged()">`+
+      `<option value=""${PROJECTS_ROOT?"":" selected"}>— none (type each time) —</option>`+
+      opts+
+      `<option value="__custom__">✎ Custom path…</option>`+
+    `</select><div id="rootCustom"></div><div class="rooterr" id="rootErr"></div>`;
+}
+function rootSelChanged(){
+  const v=document.getElementById("rootSel").value;
+  const custom=document.getElementById("rootCustom");
+  if(v==="__custom__"){
+    custom.innerHTML=
+      `<input id="rootIn" class="rootin" placeholder="/home/wzachmorris" `+
+      `value="${esc(PROJECTS_ROOT)}" autocomplete="off">`+
+      `<button class="rootsave" onclick="saveProjectsRoot()">Save</button>`;
+    const inp=document.getElementById("rootIn"); inp.focus(); inp.select();
+    inp.addEventListener("keydown",e=>{
+      if(e.key==="Enter"){ e.preventDefault(); saveProjectsRoot(); }
+      else if(e.key==="Escape"){ e.preventDefault(); renderAddRoot(); }
+    });
+    return;
+  }
+  custom.innerHTML="";
+  saveProjectsRoot(v);                   // chosen folder (or "none") applies at once
+}
+async function saveProjectsRoot(val){
+  const inp=document.getElementById("rootIn");
+  let v=(typeof val==="string"?val:(inp?inp.value:"")).trim().replace(/\/+$/,"");
+  if(v && !/^(\/|~)/.test(v)){
+    const er=document.getElementById("rootErr");
+    if(er) er.textContent="Use an absolute path (starts with / or ~).";
+    return;
+  }
+  PROJECTS_ROOT=v;                       // optimistic; resync on next loadProjects
+  await saveLayout({projects_root:v});
+  renderAddRoot();
+  // pre-fill the directory field if the user hasn't typed their own yet
+  const dir=document.getElementById("addDir");
+  if(dir && (!dir.value.trim() || /\/$/.test(dir.value.trim())))
+    dir.value=v?v+"/":"";
+}
 async function createProject(create=false){
   const name=document.getElementById("addName").value.trim();
   const dir=document.getElementById("addDir").value.trim();
