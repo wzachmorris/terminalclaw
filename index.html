@@ -197,6 +197,20 @@
   .keybar .kint{color:var(--red)}
   .keybar #mouseBtn.on{background:var(--accent);color:#0d1117;border-color:var(--accent)}
   .keybar .ksep{flex:0 0 auto;width:1px;height:22px;background:var(--border);margin:0 2px}
+  .keybar .kmic{font-size:12.5px;font-weight:600}
+  /* 🎤 dictation box — reuses .modal/.modalbox; a clean textarea so soft-keyboard
+     voice transcription isn't duplicated the way it is typed straight into xterm */
+  .dictate-body{padding:14px 16px;display:flex;flex-direction:column;gap:12px}
+  .dictate-hint{margin:0;color:var(--muted);font-size:12.5px;line-height:1.45}
+  #dictateText{width:100%;box-sizing:border-box;min-height:140px;resize:vertical;
+       background:var(--bg);color:var(--text);border:1px solid var(--border);border-radius:8px;
+       padding:11px;font-size:16px;line-height:1.4;font-family:inherit}
+  #dictateText:focus{outline:none;border-color:var(--accent)}
+  .dictate-btns{display:flex;gap:8px;justify-content:flex-end}
+  .dictate-btns button{padding:9px 16px;border-radius:8px;border:1px solid var(--border);cursor:pointer;
+       background:var(--accent);color:#0d1117;font-weight:600;font-size:14px}
+  .dictate-btns button.ghost{background:transparent;color:var(--muted);font-weight:400}
+  .dictate-btns button.ghost:hover{border-color:var(--accent);color:var(--text)}
   .md{padding:20px 26px;max-width:900px}
   .md h1,.md h2,.md h3{border-bottom:1px solid var(--border);padding-bottom:4px}
   .md code{background:var(--panel2);padding:1px 5px;border-radius:4px;font-size:12.5px}
@@ -264,6 +278,7 @@
           <span class="ksep"></span>
           <button class="kint" onclick="sendKey('ctrl-c')" title="Interrupt (Ctrl-C)">^C</button>
           <span class="ksep"></span>
+          <button class="kmic" onclick="openDictate()" title="Dictate — speak into a clean box (no repeats), then send to the terminal for you to review &amp; run">🎤 Dictate</button>
           <button class="kpaste" onclick="pasteToTerm()" title="Paste clipboard into the terminal">📋 Paste</button>
           <button id="mouseBtn" onclick="toggleMouse()" title="Scroll mode — swipe/wheel to scroll terminal history (off = drag to select &amp; copy)">📜</button>
         </div>
@@ -484,6 +499,37 @@ async function toggleMouse(){
     const j=await r.json();
     btn.classList.toggle("on", j.mouse==="on");
   }catch(e){ /* leave button as-is on failure */ }
+}
+
+// 🎤 Dictation box. Soft-keyboard voice transcription duplicates itself when typed
+// straight into xterm.js — dictation streams partial composition events and the
+// terminal forwards each one. So capture it in a plain <textarea> (clean there),
+// then bracketed-paste the final text into the terminal via the existing paste
+// channel. Bracketed paste doesn't auto-run, so it lands at the prompt for the
+// user to review and press Enter themselves.
+function openDictate(){
+  if(!CURRENT) return;
+  let m=document.getElementById("dictateModal");
+  if(!m){ m=document.createElement("div"); m.id="dictateModal"; m.className="modal"; document.body.appendChild(m); }
+  m.innerHTML='<div class="modalbox"><div class="modalhd"><b>🎤 Dictate to terminal</b>'+
+    '<span class="x" title="Close" onclick="closeDictate()">×</span></div>'+
+    '<div class="dictate-body">'+
+    '<p class="dictate-hint">Tap your keyboard\'s mic and speak — transcription stays clean here. '+
+    'Edit if needed, then Send: it drops onto the prompt <b>without running</b>, so you review and press Enter yourself.</p>'+
+    '<textarea id="dictateText" placeholder="Speak or type here…" autocomplete="off"></textarea>'+
+    '<div class="dictate-btns"><button class="ghost" onclick="closeDictate()">Cancel</button>'+
+    '<button onclick="sendDictate()">Send to terminal</button></div></div></div>';
+  m.style.display="flex";
+  const ta=document.getElementById("dictateText");
+  ta.addEventListener("keydown",e=>{ if(e.key==="Escape"){ e.preventDefault(); closeDictate(); } });
+  ta.focus();
+}
+function closeDictate(){ const m=document.getElementById("dictateModal"); if(m) m.style.display="none"; }
+async function sendDictate(){
+  const ta=document.getElementById("dictateText"); if(!ta) return;
+  const text=ta.value;
+  if(text.trim()) await sendPaste(text);   // reuse /api/term/paste (bracketed, no Enter)
+  closeDictate();
 }
 
 // --- editable hub title (persists to projects.json 'title') ---------------
