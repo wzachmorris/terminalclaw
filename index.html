@@ -54,6 +54,20 @@
           border:1px solid var(--border);background:var(--tag,transparent);opacity:.55}
   .swatch:hover{opacity:1;border-color:var(--accent)}
   .swatch.empty{background:repeating-conic-gradient(var(--muted) 0 25%,transparent 0 50%) 50%/6px 6px}
+  /* per-card hide/delete — hover-reveal on desktop, always faintly there on touch */
+  .card-actions{display:flex;gap:2px;margin-left:auto;opacity:0;transition:opacity .15s}
+  .card:hover .card-actions{opacity:1}
+  @media (pointer: coarse){ .card-actions{opacity:.5} }
+  .cact{background:none;border:none;color:var(--muted);cursor:pointer;font-size:12px;
+        padding:1px 4px;border-radius:4px;line-height:1}
+  .cact:hover{color:var(--fg);background:var(--border)}
+  .cact.danger:hover{color:#f85149}
+  .hiddenhdr{color:var(--muted);font-size:12px;cursor:pointer;padding:6px 10px;user-select:none}
+  .hiddenhdr:hover{color:var(--fg)}
+  .hiddenrow{display:flex;align-items:center;gap:4px;padding:3px 10px 3px 18px;cursor:pointer;
+             color:var(--muted);font-size:13px;border-radius:6px}
+  .hiddenrow:hover{background:var(--border);color:var(--fg)}
+  .hiddenrow .hname{flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
   /* palette popover */
   .palette{position:absolute;z-index:20;background:var(--panel2);border:1px solid var(--border);
            border-radius:9px;padding:8px;display:grid;grid-template-columns:repeat(4,18px);gap:7px;
@@ -280,6 +294,7 @@
           <span class="ksep"></span>
           <button class="kmic" onclick="openDictate()" title="Dictate — speak into a clean box (no repeats), then send to the terminal for you to review &amp; run">🎤 Dictate</button>
           <button class="kpaste" onclick="pasteToTerm()" title="Paste clipboard into the terminal">📋 Paste</button>
+          <button class="kpaste" onclick="copyFromTerm()" title="Copy from terminal — grabs the scrollback so you can copy any of it">📄 Copy</button>
           <button id="mouseBtn" onclick="toggleMouse()" title="Scroll mode — swipe/wheel to scroll terminal history (off = drag to select &amp; copy)">📜</button>
         </div>
       </div>
@@ -354,7 +369,7 @@ function renderSidebar(){
   const sb=document.getElementById("sidebar");
   const scroll=sb.scrollTop;            // preserve scroll across rebuilds
   sb.innerHTML="";
-  PROJECTS.forEach(p=>{
+  PROJECTS.filter(p=>!p.hidden).forEach(p=>{
     const c=document.createElement("div");
     c.className="card"+(CURRENT===p.id?" active":"")+(COMPACT&&CURRENT!==p.id?" compact":"");
     c.dataset.id=p.id;
@@ -371,17 +386,71 @@ function renderSidebar(){
     const domains=(p.domains&&p.domains.length)?p.domains.join(", "):"<i>no public domain</i>";
     const dot=p.claude_running?'<span class="claude" title="Claude is running"></span>':'';
     c.innerHTML=`<div class="card-top">${dot}<h3>${esc(p.name)}</h3>`+
+                `<span class="card-actions">`+
+                `<button class="cact" title="Hide project (keeps everything, just tucks it away)" `+
+                `onclick="event.stopPropagation();setHidden('${p.id}',true)">−</button>`+
+                `<button class="cact danger" title="Delete project tab (files on disk are NOT touched)" `+
+                `onclick="event.stopPropagation();deleteProject('${p.id}')">🗑</button>`+
+                `</span>`+
                 `<button class="swatch ${p.color?'':'empty'}" title="Color tag" `+
                 `onclick="openPalette(event,'${p.id}')"></button></div>`+
                 `<div class="domains">${domains}</div>`+
                 `<div class="pills">${pillsHtml(p)}</div>`;
     sb.appendChild(c);
   });
+  const hidden=PROJECTS.filter(p=>p.hidden);
+  if(hidden.length){
+    const hd=document.createElement("div");
+    hd.className="hiddenhdr";
+    hd.innerHTML=`<span>${SHOW_HIDDEN?"▾":"▸"} Hidden (${hidden.length})</span>`;
+    hd.onclick=()=>{ SHOW_HIDDEN=!SHOW_HIDDEN;
+      localStorage.setItem("tc_showhidden",SHOW_HIDDEN?"1":"0"); renderSidebar(); };
+    sb.appendChild(hd);
+    if(SHOW_HIDDEN) hidden.forEach(p=>{
+      const row=document.createElement("div");
+      row.className="hiddenrow";
+      row.innerHTML=`<span class="hname">${esc(p.name)}</span>`+
+        `<button class="cact" title="Unhide" `+
+        `onclick="event.stopPropagation();setHidden('${p.id}',false)">+</button>`+
+        `<button class="cact danger" title="Delete project tab (files on disk are NOT touched)" `+
+        `onclick="event.stopPropagation();deleteProject('${p.id}')">🗑</button>`;
+      row.onclick=()=>selectProject(p.id);
+      sb.appendChild(row);
+    });
+  }
   const add=document.createElement("div");
   add.id="addRow";
   add.innerHTML='<button class="addbtn" onclick="openAdd()">+ New project</button>';
   sb.appendChild(add);
   sb.scrollTop=scroll;
+}
+
+let SHOW_HIDDEN=localStorage.getItem("tc_showhidden")==="1";
+
+async function setHidden(id,hidden){
+  try{
+    await fetch("/api/project/hide",{method:"POST",headers:{"Content-Type":"application/json"},
+      body:JSON.stringify({project:id,hidden})});
+    const p=PROJECTS.find(x=>x.id===id);
+    if(p){ if(hidden) p.hidden=true; else delete p.hidden; }
+    renderSidebar();
+  }catch(e){ console.warn("hide failed",e); }
+}
+
+async function deleteProject(id){
+  const p=PROJECTS.find(x=>x.id===id);
+  if(!p) return;
+  if(!confirm(`Delete the "${p.name}" project tab?\n\nFiles on disk are NOT touched — this only removes the tab and its tmux session. A registry backup is saved first.`)) return;
+  try{
+    const r=await fetch("/api/project/delete",{method:"POST",headers:{"Content-Type":"application/json"},
+      body:JSON.stringify({project:id})});
+    if(!(await r.json()).ok) return;
+    PROJECTS=PROJECTS.filter(x=>x.id!==id);
+    if(CURRENT===id){ CURRENT=null;
+      const first=PROJECTS.find(x=>!x.hidden);
+      if(first) selectProject(first.id); }
+    renderSidebar();
+  }catch(e){ console.warn("delete failed",e); }
 }
 
 // In-place refresh of the dynamic bits only (claude dot, container pills,
@@ -499,6 +568,43 @@ async function toggleMouse(){
     const j=await r.json();
     btn.classList.toggle("on", j.mouse==="on");
   }catch(e){ /* leave button as-is on failure */ }
+}
+
+// 📋 Copy-from-terminal. ttyd's bundled xterm.js has no OSC-52 clipboard
+// support and selection fights tmux/full-screen apps, so the reliable path
+// is server-side: capture-pane the scrollback, show it in a modal, and write
+// the browser clipboard from the button click (a user gesture, so Chrome
+// allows it without any permission dance).
+async function copyFromTerm(){
+  if(!CURRENT) return;
+  let text="";
+  try{
+    const r=await fetch("/api/term/capture?project="+encodeURIComponent(CURRENT)+"&lines=2000");
+    text=(await r.json()).content||"";
+  }catch(e){ text="(capture failed: "+e+")"; }
+  let m=document.getElementById("copyModal");
+  if(!m){ m=document.createElement("div"); m.id="copyModal"; m.className="modal"; document.body.appendChild(m); }
+  m.innerHTML='<div class="modalbox"><div class="modalhd"><b>📋 Copy from terminal</b>'+
+    '<span class="x" title="Close" onclick="closeCopy()">×</span></div>'+
+    '<div class="dictate-body">'+
+    '<p class="dictate-hint">Last 2000 lines of this tab. <b>Copy all</b> puts everything on your '+
+    'clipboard, or select just what you need in the box (normal text selection works here).</p>'+
+    '<textarea id="copyText" readonly style="white-space:pre;overflow-x:auto"></textarea>'+
+    '<div class="dictate-btns"><button class="ghost" onclick="closeCopy()">Close</button>'+
+    '<button onclick="copyAllTerm()">Copy all</button></div></div></div>';
+  m.style.display="flex";
+  const ta=document.getElementById("copyText");
+  ta.value=text.replace(/\s+$/,"");
+  ta.scrollTop=ta.scrollHeight;
+  ta.addEventListener("keydown",e=>{ if(e.key==="Escape"){ e.preventDefault(); closeCopy(); } });
+}
+function closeCopy(){ const m=document.getElementById("copyModal"); if(m) m.style.display="none"; }
+async function copyAllTerm(){
+  const ta=document.getElementById("copyText"); if(!ta) return;
+  try{ await navigator.clipboard.writeText(ta.value); }
+  catch(e){ ta.focus(); ta.select(); document.execCommand("copy"); }
+  const btn=document.querySelector("#copyModal .dictate-btns button:not(.ghost)");
+  if(btn){ btn.textContent="Copied ✓"; setTimeout(()=>{ btn.textContent="Copy all"; },1500); }
 }
 
 // 🎤 Dictation box. Soft-keyboard voice transcription duplicates itself when typed

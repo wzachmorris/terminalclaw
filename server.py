@@ -379,6 +379,43 @@ def add_project(name, directory, create=False):
     return pid
 
 
+def set_project_hidden(pid, hidden):
+    """Hide/unhide a project card. Hidden projects keep their registry entry,
+    tmux session and files — they just collapse into the sidebar's Hidden
+    section (for people running 20+ projects)."""
+    reg = load_registry()
+    proj = _find_project(reg, (pid or "").strip())
+    if not proj:
+        raise ValueError("unknown project")
+    if hidden:
+        proj["hidden"] = True
+    else:
+        proj.pop("hidden", None)
+    write_registry(reg)
+    return bool(hidden)
+
+
+def delete_project(pid):
+    """Remove a project from the registry entirely. Files on disk are NOT
+    touched; the project's tmux session is killed so it doesn't linger.
+    The registry is backed up first (same convention as manual edits)."""
+    reg = load_registry()
+    proj = _find_project(reg, (pid or "").strip())
+    if not proj:
+        raise ValueError("unknown project")
+    stamp = time.strftime("%Y%m%d-%H%M%S")
+    try:
+        with open(f"{REGISTRY}.bak-pre-delete-{proj['id']}-{stamp}", "w", encoding="utf-8") as f:
+            json.dump(reg, f, indent=2, ensure_ascii=False)
+    except OSError:
+        pass
+    reg["projects"] = [p for p in reg.get("projects", []) if p.get("id") != proj["id"]]
+    write_registry(reg)
+    subprocess.run(["tmux", "kill-session", "-t", "hub-" + proj["id"]],
+                   check=False, timeout=5)
+    return proj["name"]
+
+
 DOC_MAX = 512 * 1024   # cap on a single document tab's size, bytes
 
 
@@ -690,6 +727,26 @@ def term_mouse(project, on):
     return state
 
 
+def term_capture(project, lines):
+    """Dump the last <lines> of project <id>'s tmux scrollback as plain text.
+    Backs the dashboard's Copy button — the reliable copy path, since the
+    bundled ttyd has no OSC-52 clipboard support and browser-side selection
+    fights tmux/full-screen apps. -J joins wrapped lines so long commands
+    copy as one line."""
+    reg = load_registry()
+    proj = _find_project(reg, (project or "").strip())
+    if not proj:
+        raise ValueError("unknown project")
+    try:
+        lines = max(1, min(int(lines), 50000))
+    except (TypeError, ValueError):
+        lines = 2000
+    out = subprocess.run(["tmux", "capture-pane", "-p", "-J",
+                          "-t", "hub-" + proj["id"], "-S", f"-{lines}"],
+                         capture_output=True, text=True, timeout=10)
+    return out.stdout
+
+
 def browse_dir(dirpath):
     """List a directory for the file picker (dirs first, then files). Read-only;
     auth-gated at the route. Falls back to $HOME for a missing/blank dir."""
@@ -853,6 +910,36 @@ class Handler(BaseHTTPRequestHandler):
             except Exception as e:
                 return self._send(500, {"error": str(e)})
             return self._send(200, {"ok": True, "id": pid})
+
+        if u.path == "/api/project/hide":
+            # Hide/unhide a project card (registry + session untouched).
+            if not self._authed():
+                return self._send(401, {"error": "unauthorized"})
+            data = self._read_json()
+            if not isinstance(data, dict):
+                return self._send(400, {"error": "bad request"})
+            try:
+                state = set_project_hidden(data.get("project"), bool(data.get("hidden")))
+            except ValueError as e:
+                return self._send(400, {"error": str(e)})
+            except Exception as e:
+                return self._send(500, {"error": str(e)})
+            return self._send(200, {"ok": True, "hidden": state})
+
+        if u.path == "/api/project/delete":
+            # Remove a project from the registry (files untouched, tmux killed).
+            if not self._authed():
+                return self._send(401, {"error": "unauthorized"})
+            data = self._read_json()
+            if not isinstance(data, dict):
+                return self._send(400, {"error": "bad request"})
+            try:
+                name = delete_project(data.get("project"))
+            except ValueError as e:
+                return self._send(400, {"error": str(e)})
+            except Exception as e:
+                return self._send(500, {"error": str(e)})
+            return self._send(200, {"ok": True, "deleted": name})
 
         if u.path == "/api/project/tabs/add":
             if not self._authed():
@@ -1033,6 +1120,19 @@ class Handler(BaseHTTPRequestHandler):
             if txt is None:
                 return self._send(404, {"error": "not found"})
             return self._send(200, {"content": txt})
+
+        if path == "/api/term/capture":
+            # Terminal scrollback as text — backs the Copy button.
+            if not self._authed():
+                return self._send(401, {"error": "unauthorized"})
+            try:
+                text = term_capture(q.get("project", [""])[0],
+                                    q.get("lines", ["2000"])[0])
+            except ValueError as e:
+                return self._send(400, {"error": str(e)})
+            except Exception as e:
+                return self._send(500, {"error": str(e)})
+            return self._send(200, {"content": text})
 
         if path == "/api/doc":
             # Read a project's doc tab by index. Path comes from the registry,
