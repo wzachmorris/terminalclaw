@@ -18,10 +18,23 @@ claude() {
   # one exists, so reopening a project picks up right where you left off (even
   # after a reboot — the transcript is on disk). For a fresh chat: `command claude`.
   if [ "$#" -eq 0 ]; then
-    local slug
+    local slug proj latest start rc
     slug=$(printf '%s' "$PWD" | sed 's/[^A-Za-z0-9]/-/g')
-    if ls "$HOME/.claude/projects/$slug/"*.jsonl >/dev/null 2>&1; then
+    proj="$HOME/.claude/projects/$slug"
+    # Newest *non-empty* transcript for this dir, if any.
+    latest=$(ls -1t "$proj"/*.jsonl 2>/dev/null | head -1)
+    if [ -n "$latest" ] && [ -s "$latest" ]; then
+      start=$SECONDS
       command claude --continue
+      rc=$?
+      # If --continue bailed almost immediately (nothing resumable, or a
+      # transient miss), don't strand the user at a bare bash prompt — just
+      # open a fresh session. A real session the user quits runs longer than
+      # this window, so this never turns into a relaunch loop.
+      if [ "$rc" -ne 0 ] && [ $((SECONDS - start)) -lt 5 ]; then
+        echo "↻ Couldn't resume last chat — starting a fresh session."
+        command claude
+      fi
       return
     fi
   fi
