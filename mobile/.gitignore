@@ -1,0 +1,10 @@
+node_modules/
+.expo/
+dist/
+web-build/
+# expo prebuild output — regenerated in CI
+ios/
+android/
+*.p12
+*.mobileprovision
+credentials.json
