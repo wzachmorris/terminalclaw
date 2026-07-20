@@ -12,6 +12,7 @@ mobile (HTTP Basic did not — mobile browsers won't re-send it into an iframe):
 Serves the dashboard SPA and a small JSON API:
 
   GET  /                 -> index.html
+  GET  /static/<file>    -> vendored frontend assets (xterm.js etc.)
   GET  /api/projects     -> registry + live docker container status
   GET  /api/memory       -> ?file=<name>  raw text of a whitelisted memory file
   GET  /api/notes        -> ?file=<name>  raw text of a whitelisted note file
@@ -1084,6 +1085,21 @@ class Handler(BaseHTTPRequestHandler):
                     return self._send(200, f.read(), "text/html; charset=utf-8")
             except FileNotFoundError:
                 return self._send(404, {"error": "index.html missing"})
+
+        if path.startswith("/static/"):
+            # Vendored frontend assets (xterm.js & friends). Flat filenames
+            # only — any path separator or dotfile is rejected, so nothing
+            # outside static/ is reachable.
+            name = path[len("/static/"):]
+            fp = os.path.join(HERE, "static", name)
+            if ("/" in name or "\\" in name or name.startswith(".")
+                    or not os.path.isfile(fp)):
+                return self._send(404, {"error": "not found"})
+            ctype = {"js": "application/javascript; charset=utf-8",
+                     "css": "text/css; charset=utf-8"}.get(
+                name.rsplit(".", 1)[-1], "application/octet-stream")
+            with open(fp, encoding="utf-8") as f:
+                return self._send(200, f.read(), ctype)
 
         if path == "/api/projects":
             reg = load_registry()

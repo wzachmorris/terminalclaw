@@ -5,6 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>TerminalClaw</title>
 <link rel="icon" id="favLink" href="data:image/svg+xml,%3Csvg%20xmlns='http://www.w3.org/2000/svg'%20viewBox='0%200%20100%20100'%3E%3Ctext%20y='.9em'%20font-size='90'%3E%F0%9F%A6%80%3C/text%3E%3C/svg%3E">
+<link rel="stylesheet" href="/static/xterm.css">
 <style>
   :root{
     --bg:#0d1117; --panel:#161b22; --panel2:#1c2230; --border:#2a3340;
@@ -196,9 +197,16 @@
   .pane{position:absolute;inset:0;overflow:auto;padding:0}
   .pane.hidden{display:none}
   #termFrame{width:100%;height:100%;border:0;background:#000}
-  /* terminal pane stacks the iframe above the mobile tap-bar */
+  /* terminal pane stacks the terminal above the mobile tap-bar */
   #pane-terminal{display:flex;flex-direction:column;overflow:hidden}
   #pane-terminal #termFrame{flex:1 1 auto;height:auto;min-height:0}
+  /* native in-page terminal (xterm.js) vs legacy ttyd iframe — the pane's
+     .native class picks which one is visible */
+  #termHost{flex:1 1 auto;min-height:0;background:#000;padding:3px 0 0 5px;display:none}
+  #pane-terminal.native #termHost{display:block}
+  #pane-terminal.native #termFrame{display:none}
+  #termHost .xterm{height:100%}
+  .keybar #legacyBtn.on{background:var(--accent);color:#0d1117;border-color:var(--accent)}
   .keybar{flex:0 0 auto;display:flex;gap:6px;align-items:center;padding:6px 8px;
           background:var(--panel);border-top:1px solid var(--border);
           overflow-x:auto;white-space:nowrap;-webkit-overflow-scrolling:touch}
@@ -272,6 +280,7 @@
     <div class="tabs" id="tabbar"></div>
     <div class="content">
       <div class="pane" id="pane-terminal">
+        <div id="termHost"></div>
         <iframe id="termFrame" src="about:blank"></iframe>
         <!-- mobile tap-bar: keys a phone keyboard can't reliably send into
              an interactive prompt (menus, Shift-Tab auto mode, Ctrl-C, …) -->
@@ -296,6 +305,8 @@
           <button class="kpaste" onclick="pasteToTerm()" title="Paste clipboard into the terminal">📋 Paste</button>
           <button class="kpaste" onclick="copyFromTerm()" title="Copy from terminal — grabs the scrollback so you can copy any of it">📄 Copy</button>
           <button id="mouseBtn" onclick="toggleMouse()" title="Scroll mode — swipe/wheel to scroll terminal history (off = drag to select &amp; copy)">📜</button>
+          <span class="ksep"></span>
+          <button id="legacyBtn" onclick="toggleLegacy()" title="Legacy terminal — switch back to the old ttyd iframe if the new in-page terminal misbehaves">🧪</button>
         </div>
       </div>
       <div class="pane hidden" id="pane-memory">
@@ -308,6 +319,9 @@
   </div>
 </div>
 
+<script src="/static/xterm.js"></script>
+<script src="/static/addon-fit.js"></script>
+<script src="/static/addon-clipboard.js"></script>
 <script>
 let PROJECTS = [];
 let GLOBALS = {essentials:[], credentials:[]};   // per-box reference-tab file lists (from projects.json)
@@ -834,11 +848,135 @@ async function createProject(create=false){
   document.getElementById("collapseBtn").classList.toggle("on",COMPACT);
 })();
 
+// --- native in-page terminal ----------------------------------------------
+// xterm.js speaking ttyd's websocket protocol directly (same /terminal/ws
+// endpoint the bundled ttyd page uses). Owning the terminal widget gives us
+// native selection + clipboard (incl. OSC-52 from tmux/vim), a controllable
+// soft-keyboard target on phones, and copy-on-select — none of which reach
+// through the old iframe. The iframe stays as a fallback: the 🧪 key toggles
+// it manually, and 4 straight websocket failures switch to it automatically.
+let TERM=null, TERMWS=null, TERMFIT=null, TERM_ID=null, TERM_TRIES=0, TERM_TIMER=null;
+let TERM_FALLBACK=false;   // set when the ws path proved broken this session
+
+function nativeTermOK(){
+  return !TERM_FALLBACK && !legacyPref() && typeof Terminal!=="undefined";
+}
+function legacyPref(){ return localStorage.getItem("tc_legacy_term")==="1"; }
+
+function termDispose(){
+  if(TERM_TIMER){ clearTimeout(TERM_TIMER); TERM_TIMER=null; }
+  if(TERMWS){ TERMWS.onclose=null; try{TERMWS.close();}catch(e){} TERMWS=null; }
+  if(TERM){ try{TERM.dispose();}catch(e){} TERM=null; TERMFIT=null; }
+  TERM_ID=null;
+}
+
+// Send user input as a ttyd INPUT frame: one '0' byte + utf-8 payload.
+function termSend(d){
+  if(!TERMWS||TERMWS.readyState!==1) return;
+  const b=new TextEncoder().encode(d);
+  const u=new Uint8Array(b.length+1); u[0]=48; u.set(b,1);
+  TERMWS.send(u);
+}
+
+function termOpen(id){
+  termDispose();
+  TERM_ID=id; TERM_TRIES=0;
+  const host=document.getElementById("termHost");
+  host.innerHTML="";
+  TERM=new Terminal({
+    cursorBlink:true, scrollback:5000, fontSize:TOUCH?13:14,
+    fontFamily:"ui-monospace,SFMono-Regular,Menlo,Consolas,monospace",
+    theme:{background:"#000000"}
+  });
+  TERMFIT=new FitAddon.FitAddon();
+  TERM.loadAddon(TERMFIT);
+  try{ TERM.loadAddon(new ClipboardAddon.ClipboardAddon()); }catch(e){} // OSC-52
+  TERM.open(host);
+  termFit();
+  TERM.onData(termSend);
+  TERM.onBinary(d=>{             // raw (non-utf8) input, e.g. some mouse reports
+    if(!TERMWS||TERMWS.readyState!==1) return;
+    const u=new Uint8Array(d.length+1); u[0]=48;
+    for(let i=0;i<d.length;i++) u[i+1]=d.charCodeAt(i)&255;
+    TERMWS.send(u);
+  });
+  TERM.onResize(({cols,rows})=>{
+    if(TERMWS&&TERMWS.readyState===1) TERMWS.send("1"+JSON.stringify({columns:cols,rows:rows}));
+  });
+  // selecting text puts it straight on the clipboard (best-effort)
+  TERM.onSelectionChange(()=>{
+    const s=TERM.getSelection();
+    if(s&&navigator.clipboard) navigator.clipboard.writeText(s).catch(()=>{});
+  });
+  termConnect(id);
+  TERM.focus();
+}
+
+function termConnect(id){
+  const proto=location.protocol==="https:"?"wss://":"ws://";
+  const ws=new WebSocket(proto+location.host+"/terminal/ws?arg="+encodeURIComponent(id),["tty"]);
+  ws.binaryType="arraybuffer";
+  TERMWS=ws;
+  ws.onopen=()=>{
+    TERM_TRIES=0;
+    ws.send(JSON.stringify({AuthToken:"",columns:TERM.cols,rows:TERM.rows}));
+  };
+  ws.onmessage=ev=>{
+    const u=new Uint8Array(ev.data);
+    if(u[0]===48&&TERM) TERM.write(u.subarray(1));   // '0' = terminal output
+    // '1' window title / '2' preferences — not used by the dashboard
+  };
+  ws.onclose=()=>{
+    if(TERM_ID!==id||!TERM) return;                  // superseded / disposed
+    TERM_TRIES++;
+    if(TERM_TRIES>4){                                // ws path is broken — bail out
+      TERM_FALLBACK=true;
+      termDispose();
+      applyTermMode();
+      return;
+    }
+    TERM.write("\r\n\x1b[33m[disconnected — reconnecting…]\x1b[0m\r\n");
+    TERM_TIMER=setTimeout(()=>termConnect(id),Math.min(1200*TERM_TRIES,5000));
+  };
+}
+
+function termFit(){
+  const host=document.getElementById("termHost");
+  if(!TERM||!TERMFIT||!host.clientWidth||!host.clientHeight) return;
+  try{ TERMFIT.fit(); }catch(e){}
+}
+window.addEventListener("resize",termFit);
+new ResizeObserver(termFit).observe(document.getElementById("termHost"));
+
+// Point the terminal pane at the right implementation for CURRENT.
+function applyTermMode(){
+  const pane=document.getElementById("pane-terminal");
+  const frame=document.getElementById("termFrame");
+  const lb=document.getElementById("legacyBtn");
+  if(lb) lb.classList.toggle("on",!nativeTermOK());
+  if(!CURRENT) return;
+  if(nativeTermOK()){
+    pane.classList.add("native");
+    frame.src="about:blank";
+    termOpen(CURRENT);
+  }else{
+    pane.classList.remove("native");
+    termDispose();
+    frame.src="/terminal/?arg="+encodeURIComponent(CURRENT);
+  }
+}
+function toggleLegacy(){
+  const on=!(legacyPref()||TERM_FALLBACK);   // current effective mode -> flip
+  localStorage.setItem("tc_legacy_term",on?"1":"0");
+  if(!on) TERM_FALLBACK=false;               // explicit retry of the native path
+  applyTermMode();
+}
+
 function selectProject(id){
   CURRENT=id;
   renderSidebar();
-  // load per-project terminal session
-  document.getElementById("termFrame").src="/terminal/?arg="+encodeURIComponent(id);
+  // load per-project terminal session (native xterm.js or legacy iframe)
+  applyTermMode();
   const mb=document.getElementById("mouseBtn"); if(mb) mb.classList.remove("on"); // per-session
   renderMemory();
   renderTabs();
@@ -897,6 +1035,7 @@ function switchTab(t){
   document.getElementById("pane-essentials").classList.toggle("hidden",t!=="essentials");
   document.getElementById("pane-credentials").classList.toggle("hidden",t!=="credentials");
   document.getElementById("pane-doc").classList.toggle("hidden",!(isDoc||isAdd));
+  if(t==="terminal") setTimeout(()=>{ termFit(); if(TERM) TERM.focus(); },0);
   if(isDoc) loadDoc(parseInt(t.slice(4),10));
   else if(isAdd) renderAddTabForm();
   else if(t==="essentials") renderEssentials();
