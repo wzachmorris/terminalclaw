@@ -1,0 +1,123 @@
+<!DOCTYPE html>
+<!-- Embedded terminal for the TerminalClaw mobile app.
+     Loaded in the app's WebView as /static/term.html?arg=<project>&token=<tok>.
+     The token (same signed format as the gate cookie) is planted as the
+     hub_session cookie before any other request, so the asset loads and the
+     /terminal/ws websocket all pass the Caddy forward_auth gate unchanged.
+     The app drives it through window.TC (injectJavaScript) and listens on
+     window.ReactNativeWebView.postMessage for status. -->
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
+<title>terminal</title>
+<script>
+  // Cookie first — everything below (css/js/ws) must carry it to get past the gate.
+  (function(){
+    var q = new URLSearchParams(location.search);
+    var t = q.get("token") || "";
+    if (t) document.cookie = "hub_session=" + t + "; path=/; max-age=" + (30*24*3600) +
+      "; SameSite=Lax" + (location.protocol === "https:" ? "; Secure" : "");
+  })();
+</script>
+<link rel="stylesheet" href="/static/xterm.css">
+<style>
+  html,body{margin:0;padding:0;height:100%;background:#000;overflow:hidden}
+  #term{position:absolute;inset:0;padding:3px 0 0 5px}
+  #term .xterm{height:100%}
+</style>
+</head>
+<body>
+<div id="term"></div>
+<script src="/static/xterm.js"></script>
+<script src="/static/addon-fit.js"></script>
+<script src="/static/addon-clipboard.js"></script>
+<script>
+var PROJECT = new URLSearchParams(location.search).get("arg") || "";
+var term = new Terminal({
+  cursorBlink: true, scrollback: 5000, fontSize: 13,
+  fontFamily: "ui-monospace,SFMono-Regular,Menlo,Consolas,monospace",
+  theme: { background: "#000000" }
+});
+var fit = new FitAddon.FitAddon();
+term.loadAddon(fit);
+try { term.loadAddon(new ClipboardAddon.ClipboardAddon()); } catch (e) {}  // OSC-52
+term.open(document.getElementById("term"));
+
+var ws = null, tries = 0, timer = null;
+
+function notify(o){
+  if (window.ReactNativeWebView) window.ReactNativeWebView.postMessage(JSON.stringify(o));
+}
+function send(d){
+  if (!ws || ws.readyState !== 1) return;
+  var b = new TextEncoder().encode(d);
+  var u = new Uint8Array(b.length + 1); u[0] = 48; u.set(b, 1);   // '0' INPUT
+  ws.send(u);
+}
+function connect(){
+  var proto = location.protocol === "https:" ? "wss://" : "ws://";
+  ws = new WebSocket(proto + location.host + "/terminal/ws?arg=" + encodeURIComponent(PROJECT), ["tty"]);
+  ws.binaryType = "arraybuffer";
+  ws.onopen = function(){
+    tries = 0;
+    ws.send(JSON.stringify({ AuthToken: "", columns: term.cols, rows: term.rows }));
+    notify({ type: "connected" });
+  };
+  ws.onmessage = function(ev){
+    var u = new Uint8Array(ev.data);
+    if (u[0] === 48) term.write(u.subarray(1));                    // '0' OUTPUT
+  };
+  ws.onclose = function(){
+    tries++;
+    notify({ type: "disconnected", tries: tries });
+    if (tries > 6) { notify({ type: "failed" }); return; }
+    term.write("\r\n\x1b[33m[disconnected — reconnecting…]\x1b[0m\r\n");
+    timer = setTimeout(connect, Math.min(1200 * tries, 5000));
+  };
+}
+function fitNow(){
+  var el = document.getElementById("term");
+  if (!el.clientWidth || !el.clientHeight) return;
+  try { fit.fit(); } catch (e) {}
+  if (ws && ws.readyState === 1) ws.send("1" + JSON.stringify({ columns: term.cols, rows: term.rows }));
+}
+term.onData(send);
+term.onBinary(function(d){
+  if (!ws || ws.readyState !== 1) return;
+  var u = new Uint8Array(d.length + 1); u[0] = 48;
+  for (var i = 0; i < d.length; i++) u[i + 1] = d.charCodeAt(i) & 255;
+  ws.send(u);
+});
+term.onResize(function(){ /* fitNow already reports; direct resizes: */
+  if (ws && ws.readyState === 1) ws.send("1" + JSON.stringify({ columns: term.cols, rows: term.rows }));
+});
+term.onSelectionChange(function(){
+  var s = term.getSelection();
+  if (s) notify({ type: "selection", text: s });    // native side owns the clipboard
+});
+window.addEventListener("resize", fitNow);
+new ResizeObserver(fitNow).observe(document.getElementById("term"));
+
+// --- native bridge: the app calls these via injectJavaScript ---------------
+var KEYS = {
+  up: "\x1b[A", down: "\x1b[B", right: "\x1b[C", left: "\x1b[D",
+  esc: "\x1b", tab: "\t", btab: "\x1b[Z", enter: "\r", "ctrl-c": "\x03",
+  "ctrl-d": "\x04", "ctrl-z": "\x1a"
+};
+window.TC = {
+  key: function(k){ send(KEYS[k] !== undefined ? KEYS[k] : k); },
+  text: function(t){ send(t); },
+  paste: function(t){ send("\x1b[200~" + t + "\x1b[201~"); },     // bracketed
+  fit: fitNow,
+  focus: function(){ term.focus(); },
+  blurKeyboard: function(){ if (document.activeElement) document.activeElement.blur(); },
+  scroll: function(n){ term.scrollLines(n); }
+};
+
+fitNow();
+connect();
+term.focus();
+</script>
+</body>
+</html>

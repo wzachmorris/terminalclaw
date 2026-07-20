@@ -18,6 +18,7 @@ Serves the dashboard SPA and a small JSON API:
   GET  /api/notes        -> ?file=<name>  raw text of a whitelisted note file
   GET  /gate/login       -> login form
   POST /gate/login       -> verify password, set signed session cookie
+  POST /api/login        -> verify password, return 30-day token (mobile app)
   GET  /gate/check       -> 200 if cookie valid else 302 (Caddy forward_auth target)
   GET  /gate/logout      -> clear cookie
 
@@ -106,10 +107,29 @@ def _b64u(b):
     return base64.urlsafe_b64encode(b).rstrip(b"=").decode()
 
 
-def make_token():
-    exp = int(time.time()) + TTL
+def make_token(ttl=TTL):
+    exp = int(time.time()) + ttl
     sig = _b64u(hmac.new(SECRET, str(exp).encode(), hashlib.sha256).digest())
     return f"{exp}.{sig}"
+
+
+# Mobile-app sessions live longer than browser cookies (scrcpy-native pattern:
+# log in once, hold an HMAC token for a month). Same signed format as the gate
+# cookie, so an app token IS a valid hub_session cookie value.
+APP_TTL = 30 * 24 * 3600
+
+# Login rate limit: 5 attempts/min per client IP, shared by the form and the
+# JSON login. (Behind Caddy on localhost the IP is the proxy's, so effectively
+# a global brake — fine for a single-user hub.)
+_LOGIN_ATTEMPTS = {}
+
+
+def login_limited(ip):
+    now = time.time()
+    recent = [t for t in _LOGIN_ATTEMPTS.get(ip, []) if now - t < 60]
+    recent.append(now)
+    _LOGIN_ATTEMPTS[ip] = recent
+    return len(recent) > 5
 
 
 def token_valid(tok):
@@ -807,8 +827,9 @@ class Handler(BaseHTTPRequestHandler):
         self.end_headers()
 
     def _authed(self):
-        """True iff the request carries a valid layer-2 session cookie."""
-        tok = cookie_value(self.headers, COOKIE)
+        """True iff the request carries a valid layer-2 session cookie, or a
+        valid session token in X-TC-Token (the mobile app's native fetches)."""
+        tok = cookie_value(self.headers, COOKIE) or self.headers.get("X-TC-Token")
         return bool(tok and token_valid(tok))
 
     def _read_json(self):
@@ -823,6 +844,9 @@ class Handler(BaseHTTPRequestHandler):
     def do_POST(self):
         u = urlparse(self.path)
         if u.path == "/gate/login":
+            if login_limited(self.client_address[0]):
+                err = '<div class="err">Too many attempts — wait a minute.</div>'
+                return self._send(429, LOGIN_HTML.format(err=err), "text/html; charset=utf-8")
             length = int(self.headers.get("Content-Length", "0") or 0)
             body = self.rfile.read(length).decode("utf-8", "replace")
             pw = parse_qs(body).get("password", [""])[0]
@@ -830,6 +854,21 @@ class Handler(BaseHTTPRequestHandler):
                 return self._redirect("/", _cookie_header(make_token(), TTL))
             err = '<div class="err">Wrong password.</div>'
             return self._send(401, LOGIN_HTML.format(err=err), "text/html; charset=utf-8")
+
+        if u.path == "/api/login":
+            # Mobile-app login: password -> long-lived signed session token
+            # {token, expiresAt(ms)}. The token doubles as a hub_session
+            # cookie value (same format), which is how the app's terminal
+            # webview authenticates its asset and websocket requests.
+            if login_limited(self.client_address[0]):
+                return self._send(429, {"error": "too many attempts"})
+            data = self._read_json()
+            pw = data.get("password") if isinstance(data, dict) else None
+            if not (isinstance(pw, str) and verify_password(pw)):
+                return self._send(401, {"error": "bad password"})
+            tok = make_token(APP_TTL)
+            return self._send(200, {"token": tok,
+                                    "expiresAt": int(tok.split(".")[0]) * 1000})
 
         if u.path == "/api/layout":
             # Persist tab order + color tags. Mutating route, so enforce auth
@@ -1074,7 +1113,10 @@ class Handler(BaseHTTPRequestHandler):
             return self._redirect("/gate/login", _cookie_header("", 0))
         if path == "/gate/check":
             # Caddy forward_auth target: 200 = allow, 302 = bounce to login.
-            tok = cookie_value(self.headers, COOKIE)
+            # forward_auth copies the original request headers, so the mobile
+            # app can pass X-TC-Token on requests that can't carry the cookie.
+            tok = (cookie_value(self.headers, COOKIE)
+                   or self.headers.get("X-TC-Token"))
             if tok and token_valid(tok):
                 return self._send(200, "ok", "text/plain")
             return self._redirect("/gate/login")
