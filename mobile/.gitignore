@@ -3,8 +3,8 @@ node_modules/
 dist/
 web-build/
 # expo prebuild output — regenerated in CI
-ios/
-android/
+/ios/
+/android/
 *.p12
 *.mobileprovision
 credentials.json
