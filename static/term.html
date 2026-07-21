@@ -94,7 +94,22 @@ term.onResize(function(){ /* fitNow already reports; direct resizes: */
 });
 term.onSelectionChange(function(){
   var s = term.getSelection();
-  if (s) notify({ type: "selection", text: s });    // native side owns the clipboard
+  if (!s) return;
+  notify({ type: "selection", text: s });           // native side mirrors it
+  if (navigator.clipboard) navigator.clipboard.writeText(s).catch(function(){});
+});
+// xterm paints to canvas, so there is no DOM selection and the OS-level
+// Cmd/Ctrl+C copies nothing. Intercept it ourselves when a selection exists
+// (no selection -> falls through as a normal terminal interrupt).
+term.attachCustomKeyEventHandler(function(ev){
+  if (ev.type === "keydown" && (ev.metaKey || ev.ctrlKey) && ev.key === "c"
+      && term.hasSelection()) {
+    var s = term.getSelection();
+    notify({ type: "selection", text: s });
+    if (navigator.clipboard) navigator.clipboard.writeText(s).catch(function(){});
+    return false;
+  }
+  return true;
 });
 window.addEventListener("resize", fitNow);
 new ResizeObserver(fitNow).observe(document.getElementById("term"));

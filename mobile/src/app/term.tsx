@@ -12,7 +12,9 @@ import { router, Stack, useFocusEffect, useLocalSearchParams } from 'expo-router
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { WebView } from 'react-native-webview';
 import * as Clipboard from 'expo-clipboard';
-import { getProjects, Project, termUrl } from '@/lib/api';
+import {
+  deleteProject, getProjects, Project, setProjectHidden, termCapture, termUrl,
+} from '@/lib/api';
 import { Box, loadBoxes, tokenAlive } from '@/lib/boxes';
 import { C } from '@/lib/theme';
 
@@ -31,11 +33,16 @@ export default function Workspace() {
   const [projects, setProjects] = useState<Project[]>([]);
   const [projectId, setProjectId] = useState<string | undefined>(params.project);
   const [status, setStatus] = useState<'connecting' | 'up' | 'down'>('connecting');
+  const [showHidden, setShowHidden] = useState(false);
+  const [copied, setCopied] = useState(false);
   const web = useRef<WebView>(null);
+  const lastSel = useRef('');
   const wide = useWindowDimensions().width >= 700;
 
   const box = boxes.find((b) => b.id === boxId);
   const project = projects.find((p) => p.id === projectId);
+  const visible = projects.filter((p) => !p.hidden);
+  const hidden = projects.filter((p) => p.hidden);
 
   useFocusEffect(useCallback(() => {
     void loadBoxes().then((bs) => {
@@ -44,21 +51,23 @@ export default function Workspace() {
     });
   }, [boxId]));
 
+  const loadProjects = useCallback(() => {
+    if (!box) return Promise.resolve();
+    return getProjects(box).then((d) => {
+      setProjects(d.projects);
+      setProjectId((cur) =>
+        cur && d.projects.some((p) => p.id === cur)
+          ? cur : d.projects.find((p) => !p.hidden)?.id);
+    }).catch(() => { /* poll again; terminal itself shows real failures */ });
+  }, [box?.id, box?.token]);
+
   // load (and lightly poll) the selected box's projects
   useEffect(() => {
     if (!box) return;
-    let live = true;
-    const load = () => getProjects(box).then((d) => {
-      if (!live) return;
-      const vis = d.projects.filter((p) => !p.hidden);
-      setProjects(vis);
-      setProjectId((cur) =>
-        cur && vis.some((p) => p.id === cur) ? cur : vis[0]?.id);
-    }).catch(() => { /* poll again; terminal itself shows real failures */ });
-    load();
-    const t = setInterval(load, 15000);
-    return () => { live = false; clearInterval(t); };
-  }, [box?.id, box?.token]);
+    void loadProjects();
+    const t = setInterval(() => void loadProjects(), 15000);
+    return () => clearInterval(t);
+  }, [loadProjects]);
 
   const js = useCallback((code: string) => {
     web.current?.injectJavaScript(`window.TC && (${code}); true;`);
@@ -67,6 +76,42 @@ export default function Workspace() {
   const paste = async () => {
     const t = await Clipboard.getStringAsync();
     if (t) js(`TC.paste(${JSON.stringify(t)})`);
+  };
+
+  // Copy = current/last selection if there is one, else the whole scrollback
+  // (server-side capture-pane, same as the web dashboard's Copy button).
+  const copyOut = async () => {
+    let text = lastSel.current;
+    if (!text && box && project) {
+      try { text = (await termCapture(box, project.id)).content; } catch { return; }
+    }
+    if (!text) return;
+    await Clipboard.setStringAsync(text.replace(/\s+$/, ''));
+    setCopied(true);
+    setTimeout(() => setCopied(false), 1500);
+  };
+
+  // long-press a project: hide/unhide/delete (mirrors the web sidebar's − and 🗑)
+  const projectMenu = (p: Project) => {
+    if (!box) return;
+    const b = box;
+    const reload = () => void loadProjects();
+    Alert.alert(p.name, undefined, [
+      p.hidden
+        ? { text: 'Unhide', onPress: () => void setProjectHidden(b, p.id, false).then(reload) }
+        : { text: 'Hide', onPress: () => void setProjectHidden(b, p.id, true).then(reload) },
+      {
+        text: 'Delete tab', style: 'destructive',
+        onPress: () => Alert.alert(`Delete "${p.name}"?`,
+          'Files on disk are NOT touched — this only removes the tab and its tmux session.',
+          [
+            { text: 'Cancel', style: 'cancel' },
+            { text: 'Delete', style: 'destructive',
+              onPress: () => void deleteProject(b, p.id).then(reload) },
+          ]),
+      },
+      { text: 'Cancel', style: 'cancel' },
+    ]);
   };
 
   const pickBox = (b: Box) => {
@@ -85,8 +130,10 @@ export default function Workspace() {
         compact ? s.pchip : s.prow,
         { borderLeftColor: p.color ?? 'transparent' },
         p.id === projectId && s.pactive,
+        p.hidden && { opacity: 0.5 },
       ]}
       onPress={() => { setStatus('connecting'); setProjectId(p.id); }}
+      onLongPress={() => projectMenu(p)}
     >
       {p.claude_running && <View style={s.claude} />}
       <Text style={[s.pname, p.id === projectId && { color: C.text }]}
@@ -129,7 +176,15 @@ export default function Workspace() {
           {/* wide: persistent project sidebar */}
           {wide && (
             <ScrollView style={s.sidebar} contentContainerStyle={{ padding: 6 }}>
-              {projects.map((p) => projectRow(p, false))}
+              {visible.map((p) => projectRow(p, false))}
+              {hidden.length > 0 && (
+                <Pressable style={s.hiddenHdr} onPress={() => setShowHidden(!showHidden)}>
+                  <Text style={s.hiddenHdrTxt}>
+                    {showHidden ? '▾' : '▸'} Hidden ({hidden.length})
+                  </Text>
+                </Pressable>
+              )}
+              {showHidden && hidden.map((p) => projectRow(p, false))}
             </ScrollView>
           )}
           <View style={{ flex: 1 }}>
@@ -137,7 +192,14 @@ export default function Workspace() {
             {!wide && (
               <ScrollView horizontal showsHorizontalScrollIndicator={false}
                 style={s.pstrip} contentContainerStyle={s.pstripInner}>
-                {projects.map((p) => projectRow(p, true))}
+                {visible.map((p) => projectRow(p, true))}
+                {hidden.length > 0 && (
+                  <Pressable style={[s.pchip, { borderLeftColor: 'transparent' }]}
+                    onPress={() => setShowHidden(!showHidden)}>
+                    <Text style={s.pname}>🫥 {hidden.length}</Text>
+                  </Pressable>
+                )}
+                {showHidden && hidden.map((p) => projectRow(p, true))}
               </ScrollView>
             )}
             {box && project ? (
@@ -158,6 +220,7 @@ export default function Workspace() {
                     else if (m.type === 'disconnected') setStatus('connecting');
                     else if (m.type === 'failed') setStatus('down');
                     else if (m.type === 'selection' && m.text) {
+                      lastSel.current = m.text;
                       void Clipboard.setStringAsync(m.text);
                     }
                   } catch { /* not ours */ }
@@ -184,6 +247,9 @@ export default function Workspace() {
               <View style={s.sep} />
               <Pressable style={[s.kbtn, s.kwide]} onPress={paste}>
                 <Text style={s.klabel}>📋 Paste</Text>
+              </Pressable>
+              <Pressable style={[s.kbtn, s.kwide]} onPress={copyOut}>
+                <Text style={s.klabel}>{copied ? '✓ Copied' : '📄 Copy'}</Text>
               </Pressable>
               <Pressable style={[s.kbtn, s.kwide]} onPress={() => js('TC.blurKeyboard()')}>
                 <Text style={s.klabel}>⌨ Hide</Text>
@@ -230,6 +296,8 @@ const s = StyleSheet.create({
     backgroundColor: C.bg, borderLeftWidth: 3,
   },
   pactive: { backgroundColor: C.panel2 },
+  hiddenHdr: { padding: 8, marginTop: 4 },
+  hiddenHdrTxt: { color: C.muted, fontSize: 12 },
   pname: { color: C.muted, fontSize: 13, flexShrink: 1 },
   claude: { width: 7, height: 7, borderRadius: 4, backgroundColor: C.green },
   pstrip: {

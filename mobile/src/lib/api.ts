@@ -50,3 +50,27 @@ export function termUrl(box: Box, projectId: string): string {
   return `${box.url}/static/term.html?arg=${encodeURIComponent(projectId)}` +
          `&token=${encodeURIComponent(box.token)}`;
 }
+
+export async function setProjectHidden(box: Box, project: string, hidden: boolean) {
+  return req(`${box.url}/api/project/hide`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', 'X-TC-Token': box.token },
+    body: JSON.stringify({ project, hidden }),
+  });
+}
+
+export async function deleteProject(box: Box, project: string) {
+  return req(`${box.url}/api/project/delete`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', 'X-TC-Token': box.token },
+    body: JSON.stringify({ project }),
+  });
+}
+
+// Scrollback dump — backs the Copy button when nothing is selected.
+export async function termCapture(box: Box, project: string):
+    Promise<{ content: string }> {
+  return req(`${box.url}/api/term/capture?project=${encodeURIComponent(project)}&lines=2000`, {
+    headers: { 'X-TC-Token': box.token },
+  });
+}
