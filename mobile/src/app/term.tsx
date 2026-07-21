@@ -19,6 +19,7 @@ import {
 } from '@/lib/api';
 import { Box, loadBoxes, tokenAlive } from '@/lib/boxes';
 import { C } from '@/lib/theme';
+import { TCTerminal, TCTerminalView } from '../../modules/tc-terminal';
 
 const KEYS: Array<{ label: string; key: string; wide?: boolean }> = [
   { label: '↑', key: 'up' }, { label: '↓', key: 'down' },
@@ -27,6 +28,13 @@ const KEYS: Array<{ label: string; key: string; wide?: boolean }> = [
   { label: '⇧⇥', key: 'btab', wide: true },
   { label: '^C', key: 'ctrl-c' }, { label: '⏎', key: 'enter' },
 ];
+
+// byte sequences for the native terminal path (term.html has its own copy)
+const SEQ: Record<string, string> = {
+  up: '\u001b[A', down: '\u001b[B', left: '\u001b[D', right: '\u001b[C',
+  esc: '\u001b', tab: '\t', btab: '\u001b[Z', enter: '\r',
+  'ctrl-c': '\u0003',
+};
 
 export default function Workspace() {
   const params = useLocalSearchParams<{ box?: string; project?: string }>();
@@ -114,13 +122,46 @@ export default function Workspace() {
     return () => clearInterval(t);
   }, [loadProjects, prefsReady]);
 
+  // ⚡ native SwiftTerm terminal (v2) — opt-in, WebView stays the fallback.
+  // Native sessions live in the module's manager keyed by box:project:token
+  // tail, so tab/box switches just re-show a live view: instant, scrollback
+  // intact, no WebKit suspension games.
+  const [nativePref, setNativePref] = useState(false);
+  useEffect(() => {
+    void SecureStore.getItemAsync('tc.nativeTerm').then((r) => setNativePref(r === '1'));
+  }, []);
+  const nativeOn = nativePref && !!TCTerminalView && !!TCTerminal;
+  const toggleNative = () => {
+    const next = !nativePref;
+    setNativePref(next);
+    void SecureStore.setItemAsync('tc.nativeTerm', next ? '1' : '0');
+    if (!next) TCTerminal?.disconnectAll();
+    setStatus('connecting');
+  };
+  const sessionKey = box && project
+    ? `${box.id}:${project.id}:${box.token.slice(-8)}` : '';
+  const wsEndpoint = box && project
+    ? `${box.url.replace(/^http/i, 'ws')}/terminal/ws?arg=${encodeURIComponent(project.id)}` +
+      `&token=${encodeURIComponent(box.token)}`
+    : '';
+
   const js = useCallback((code: string) => {
     web.current?.injectJavaScript(`window.TC && (${code}); true;`);
   }, []);
 
+  // one input path for both terminals
+  const sendKey = (k: string) => {
+    if (nativeOn && sessionKey) TCTerminal!.send(sessionKey, SEQ[k] ?? k);
+    else js(`TC.key(${JSON.stringify(k)})`);
+  };
+  const sendPaste = (t: string) => {
+    if (nativeOn && sessionKey) TCTerminal!.send(sessionKey, `\u001b[200~${t}\u001b[201~`);
+    else js(`TC.paste(${JSON.stringify(t)})`);
+  };
+
   const paste = async () => {
     const t = await Clipboard.getStringAsync();
-    if (t) js(`TC.paste(${JSON.stringify(t)})`);
+    if (t) sendPaste(t);
   };
 
   // Copy priority: (1) the tmux paste buffer — with mouse mode on, a drag
@@ -130,7 +171,12 @@ export default function Workspace() {
   const copyOut = async () => {
     if (!box) return;
     let text = '';
-    try { text = (await termBuffer(box)).content; } catch { /* fall through */ }
+    if (nativeOn && sessionKey) {
+      try { text = await TCTerminal!.getSelection(sessionKey); } catch { /* fall through */ }
+    }
+    if (!text) {
+      try { text = (await termBuffer(box)).content; } catch { /* fall through */ }
+    }
     if (!text) text = lastSel.current;
     if (!text && project) {
       try { text = (await termCapture(box, project.id)).content; } catch { return; }
@@ -266,7 +312,19 @@ export default function Workspace() {
                 {showHidden && hidden.map((p) => projectRow(p, true))}
               </ScrollView>
             )}
-            {box && project ? (
+            {box && project && nativeOn && TCTerminalView ? (
+              <TCTerminalView
+                key={sessionKey}
+                sessionKey={sessionKey}
+                endpoint={wsEndpoint}
+                fontSize={13}
+                style={s.web}
+                onStatus={(e) => {
+                  const st = e.nativeEvent.status;
+                  setStatus(st === 'up' ? 'up' : st === 'down' ? 'down' : 'connecting');
+                }}
+              />
+            ) : box && project ? (
               <WebView
                 key={`${box.id}:${project.id}`}
                 ref={web}
@@ -304,7 +362,7 @@ export default function Workspace() {
             >
               {KEYS.map((k) => (
                 <Pressable key={k.key} style={[s.kbtn, k.wide && s.kwide]}
-                  onPress={() => js(`TC.key(${JSON.stringify(k.key)})`)}>
+                  onPress={() => sendKey(k.key)}>
                   <Text style={s.klabel}>{k.label}</Text>
                 </Pressable>
               ))}
@@ -321,9 +379,18 @@ export default function Workspace() {
               </Pressable>
               {/* dismisses the phone's on-screen keyboard — pointless with a
                   hardware keyboard, so wide screens don't get it */}
-              {!wide && (
+              {!wide && !nativeOn && (
                 <Pressable style={[s.kbtn, s.kwide]} onPress={() => js('TC.blurKeyboard()')}>
                   <Text style={s.klabel}>⌨ Hide</Text>
+                </Pressable>
+              )}
+              {/* ⚡ v2 native terminal (SwiftTerm) — only offered when this
+                  binary contains the module; WebView remains the fallback */}
+              {!!TCTerminalView && (
+                <Pressable
+                  style={[s.kbtn, s.kwide, nativeOn && { borderColor: C.accent }]}
+                  onPress={toggleNative}>
+                  <Text style={[s.klabel, nativeOn && { color: C.accent }]}>⚡</Text>
                 </Pressable>
               )}
             </ScrollView>
@@ -359,7 +426,7 @@ export default function Workspace() {
               </Pressable>
               <Pressable style={[s.kbtn, s.kwide, { backgroundColor: C.accent }]}
                 onPress={() => {
-                  if (dictText.trim()) js(`TC.paste(${JSON.stringify(dictText)})`);
+                  if (dictText.trim()) sendPaste(dictText);
                   setDictating(false);
                 }}>
                 <Text style={{ color: C.bg, fontWeight: '600' }}>Send to terminal</Text>
