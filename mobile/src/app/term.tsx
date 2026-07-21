@@ -12,6 +12,7 @@ import { router, Stack, useFocusEffect, useLocalSearchParams } from 'expo-router
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { WebView } from 'react-native-webview';
 import * as Clipboard from 'expo-clipboard';
+import * as SecureStore from 'expo-secure-store';
 import {
   deleteProject, getProjects, Project, setProjectHidden, termBuffer,
   termCapture, termUrl,
@@ -45,6 +46,22 @@ export default function Workspace() {
   const visible = projects.filter((p) => !p.hidden);
   const hidden = projects.filter((p) => p.hidden);
 
+  // last-opened project per box — switching machines (or relaunching the
+  // app) drops you back on the tab you left, not the first one
+  const lastByBox = useRef<Record<string, string>>({});
+  const [prefsReady, setPrefsReady] = useState(false);
+  useEffect(() => {
+    void SecureStore.getItemAsync('tc.lastProjects').then((raw) => {
+      if (raw) { try { lastByBox.current = JSON.parse(raw); } catch { /* fresh */ } }
+      setPrefsReady(true);
+    });
+  }, []);
+  useEffect(() => {
+    if (!boxId || !projectId) return;
+    lastByBox.current[boxId] = projectId;
+    void SecureStore.setItemAsync('tc.lastProjects', JSON.stringify(lastByBox.current));
+  }, [boxId, projectId]);
+
   useFocusEffect(useCallback(() => {
     void loadBoxes().then((bs) => {
       setBoxes(bs);
@@ -54,21 +71,25 @@ export default function Workspace() {
 
   const loadProjects = useCallback(() => {
     if (!box) return Promise.resolve();
+    const bid = box.id;
     return getProjects(box).then((d) => {
       setProjects(d.projects);
-      setProjectId((cur) =>
-        cur && d.projects.some((p) => p.id === cur)
-          ? cur : d.projects.find((p) => !p.hidden)?.id);
+      setProjectId((cur) => {
+        if (cur && d.projects.some((p) => p.id === cur)) return cur;
+        const remembered = lastByBox.current[bid];
+        if (remembered && d.projects.some((p) => p.id === remembered)) return remembered;
+        return d.projects.find((p) => !p.hidden)?.id;
+      });
     }).catch(() => { /* poll again; terminal itself shows real failures */ });
   }, [box?.id, box?.token]);
 
   // load (and lightly poll) the selected box's projects
   useEffect(() => {
-    if (!box) return;
+    if (!box || !prefsReady) return;
     void loadProjects();
     const t = setInterval(() => void loadProjects(), 15000);
     return () => clearInterval(t);
-  }, [loadProjects]);
+  }, [loadProjects, prefsReady]);
 
   const js = useCallback((code: string) => {
     web.current?.injectJavaScript(`window.TC && (${code}); true;`);
