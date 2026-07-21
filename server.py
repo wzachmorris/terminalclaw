@@ -1119,7 +1119,10 @@ class Handler(BaseHTTPRequestHandler):
             # The OTA install routes are public by design (iOS fetches the
             # manifest/ipa with no cookies; the build is UDID-locked anyway).
             fwd = self.headers.get("X-Forwarded-Uri", "")
-            if fwd == "/app" or fwd.startswith("/app/"):
+            if (fwd == "/app" or fwd.startswith("/app/")
+                    or fwd.split("?")[0] == "/api/login"):
+                # /api/login does its own password check + rate limit; it must
+                # be reachable without a session or the app could never log in.
                 return self._send(200, "ok", "text/plain")
             tok = (cookie_value(self.headers, COOKIE)
                    or self.headers.get("X-TC-Token"))
