@@ -39,7 +39,7 @@ export default function Workspace() {
   const [copied, setCopied] = useState(false);
   const [dictating, setDictating] = useState(false);
   const [dictText, setDictText] = useState('');
-  const web = useRef<WebView>(null);
+  const webRefs = useRef<Record<string, WebView | null>>({});
   const lastSel = useRef('');
   const wide = useWindowDimensions().width >= 700;
 
@@ -47,6 +47,36 @@ export default function Workspace() {
   const project = projects.find((p) => p.id === projectId);
   const visible = projects.filter((p) => !p.hidden);
   const hidden = projects.filter((p) => p.hidden);
+  const activeKey = box && project ? `${box.id}:${project.id}` : '';
+
+  // Kept-alive terminal pool: the last few terminals stay mounted (hidden)
+  // with their websockets open, so switching back is instant — no page
+  // reload through the tunnel, no reconnect, scrollback intact.
+  const [pool, setPool] = useState<Array<{ key: string; box: Box; projectId: string }>>([]);
+  useEffect(() => {
+    if (!box || !project) return;
+    const key = `${box.id}:${project.id}`;
+    setPool((prev) => {
+      const rest = prev.filter((e) => e.key !== key);
+      return [...rest, { key, box, projectId: project.id }].slice(-3);
+    });
+  }, [box?.id, box?.token, project?.id]);
+
+  // sidebar/tab zoom for big monitors — 5 steps, persisted per device
+  const ZOOMS = [0.85, 1, 1.15, 1.35, 1.6];
+  const [zoomI, setZoomI] = useState(1);
+  useEffect(() => {
+    void SecureStore.getItemAsync('tc.tabZoom').then((r) => {
+      const i = r ? parseInt(r, 10) : NaN;
+      if (!Number.isNaN(i) && i >= 0 && i < ZOOMS.length) setZoomI(i);
+    });
+  }, []);
+  const bumpZoom = (d: number) => {
+    const i = Math.max(0, Math.min(ZOOMS.length - 1, zoomI + d));
+    setZoomI(i);
+    void SecureStore.setItemAsync('tc.tabZoom', String(i));
+  };
+  const Z = ZOOMS[zoomI];
 
   // last-opened project per box — switching machines (or relaunching the
   // app) drops you back on the tab you left, not the first one
@@ -94,8 +124,17 @@ export default function Workspace() {
   }, [loadProjects, prefsReady]);
 
   const js = useCallback((code: string) => {
-    web.current?.injectJavaScript(`window.TC && (${code}); true;`);
-  }, []);
+    if (!activeKey) return;
+    webRefs.current[activeKey]?.injectJavaScript(`window.TC && (${code}); true;`);
+  }, [activeKey]);
+
+  // bringing a pooled terminal to the front: sync the status dot, revive a
+  // dead socket, refit
+  useEffect(() => {
+    if (!activeKey) return;
+    const t = setTimeout(() => js('TC.wake && TC.wake()'), 80);
+    return () => clearTimeout(t);
+  }, [activeKey, js]);
 
   const paste = async () => {
     const t = await Clipboard.getStringAsync();
@@ -157,6 +196,9 @@ export default function Workspace() {
       key={p.id}
       style={[
         compact ? s.pchip : s.prow,
+        compact
+          ? { paddingHorizontal: 10 * Z, paddingVertical: 6 * Z }
+          : { padding: 9 * Z },
         { borderLeftColor: p.color ?? 'transparent' },
         p.id === projectId && s.pactive,
         p.hidden && { opacity: 0.5 },
@@ -165,7 +207,7 @@ export default function Workspace() {
       onLongPress={() => projectMenu(p)}
     >
       {p.claude_running && <View style={s.claude} />}
-      <Text style={[s.pname, p.id === projectId && { color: C.text }]}
+      <Text style={[s.pname, { fontSize: 13 * Z }, p.id === projectId && { color: C.text }]}
         numberOfLines={1}>{p.name}</Text>
     </Pressable>
   );
@@ -204,17 +246,28 @@ export default function Workspace() {
         <View style={s.body}>
           {/* wide: persistent project sidebar */}
           {wide && (
-            <ScrollView style={s.sidebar} contentContainerStyle={{ padding: 6 }}>
-              {visible.map((p) => projectRow(p, false))}
-              {hidden.length > 0 && (
-                <Pressable style={s.hiddenHdr} onPress={() => setShowHidden(!showHidden)}>
-                  <Text style={s.hiddenHdrTxt}>
-                    {showHidden ? '▾' : '▸'} Hidden ({hidden.length})
-                  </Text>
+            <View style={[s.sidebar, { width: 190 * Z }]}>
+              <ScrollView contentContainerStyle={{ padding: 6 }}>
+                {visible.map((p) => projectRow(p, false))}
+                {hidden.length > 0 && (
+                  <Pressable style={s.hiddenHdr} onPress={() => setShowHidden(!showHidden)}>
+                    <Text style={s.hiddenHdrTxt}>
+                      {showHidden ? '▾' : '▸'} Hidden ({hidden.length})
+                    </Text>
+                  </Pressable>
+                )}
+                {showHidden && hidden.map((p) => projectRow(p, false))}
+              </ScrollView>
+              {/* tab zoom for big monitors */}
+              <View style={s.zoomRow}>
+                <Pressable style={s.zoomBtn} onPress={() => bumpZoom(-1)}>
+                  <Text style={s.zoomTxt}>A−</Text>
                 </Pressable>
-              )}
-              {showHidden && hidden.map((p) => projectRow(p, false))}
-            </ScrollView>
+                <Pressable style={s.zoomBtn} onPress={() => bumpZoom(1)}>
+                  <Text style={s.zoomTxt}>A+</Text>
+                </Pressable>
+              </View>
+            </View>
           )}
           <View style={{ flex: 1 }}>
             {/* narrow: project chip strip stays in sight above the terminal */}
@@ -231,37 +284,45 @@ export default function Workspace() {
                 {showHidden && hidden.map((p) => projectRow(p, true))}
               </ScrollView>
             )}
-            {box && project ? (
-              <WebView
-                key={`${box.id}:${project.id}`}
-                ref={web}
-                source={{ uri: termUrl(box, project.id) }}
-                style={s.web}
-                originWhitelist={['https://*', 'http://*']}
-                keyboardDisplayRequiresUserAction={false}
-                hideKeyboardAccessoryView
-                allowsLinkPreview={false}
-                setSupportMultipleWindows={false}
-                onMessage={(ev) => {
-                  try {
-                    const m = JSON.parse(ev.nativeEvent.data);
-                    if (m.type === 'connected') setStatus('up');
-                    else if (m.type === 'disconnected') setStatus('connecting');
-                    else if (m.type === 'failed') setStatus('down');
-                    else if (m.type === 'selection' && m.text) {
-                      lastSel.current = m.text;
-                      void Clipboard.setStringAsync(m.text);
-                    }
-                  } catch { /* not ours */ }
-                }}
-              />
-            ) : (
-              <View style={[s.web, s.center]}>
-                <Text style={{ color: C.muted }}>
-                  {boxes.length ? 'Loading projects…' : 'No machines — go back and add one.'}
-                </Text>
-              </View>
-            )}
+            <View style={s.termWrap}>
+              {pool.map((e) => {
+                const isActive = e.key === activeKey;
+                return (
+                  <WebView
+                    key={e.key}
+                    ref={(r) => { webRefs.current[e.key] = r; }}
+                    source={{ uri: termUrl(e.box, e.projectId) }}
+                    style={[s.webAbs, !isActive && s.webOff]}
+                    pointerEvents={isActive ? 'auto' : 'none'}
+                    originWhitelist={['https://*', 'http://*']}
+                    keyboardDisplayRequiresUserAction={false}
+                    hideKeyboardAccessoryView
+                    allowsLinkPreview={false}
+                    setSupportMultipleWindows={false}
+                    onMessage={(ev) => {
+                      try {
+                        const m = JSON.parse(ev.nativeEvent.data);
+                        if (!isActive) return;      // background pool noise
+                        if (m.type === 'connected') setStatus('up');
+                        else if (m.type === 'disconnected') setStatus('connecting');
+                        else if (m.type === 'failed') setStatus('down');
+                        else if (m.type === 'selection' && m.text) {
+                          lastSel.current = m.text;
+                          void Clipboard.setStringAsync(m.text);
+                        }
+                      } catch { /* not ours */ }
+                    }}
+                  />
+                );
+              })}
+              {pool.length === 0 && (
+                <View style={[s.webAbs, s.center]}>
+                  <Text style={{ color: C.muted }}>
+                    {boxes.length ? 'Loading projects…' : 'No machines — go back and add one.'}
+                  </Text>
+                </View>
+              )}
+            </View>
             <ScrollView
               horizontal keyboardShouldPersistTaps="always"
               showsHorizontalScrollIndicator={false}
@@ -357,9 +418,24 @@ const s = StyleSheet.create({
   dot: { width: 9, height: 9, borderRadius: 5, marginHorizontal: 6 },
   body: { flex: 1, flexDirection: 'row', backgroundColor: '#000' },
   sidebar: {
-    width: 190, flexGrow: 0, backgroundColor: C.bg,
+    backgroundColor: C.bg,
     borderRightWidth: 1, borderRightColor: C.border,
   },
+  zoomRow: {
+    flexDirection: 'row', gap: 6, padding: 8,
+    borderTopWidth: 1, borderTopColor: C.border,
+  },
+  zoomBtn: {
+    flex: 1, alignItems: 'center', paddingVertical: 6, borderRadius: 7,
+    backgroundColor: C.panel2, borderWidth: 1, borderColor: C.border,
+  },
+  zoomTxt: { color: C.muted, fontSize: 13, fontWeight: '600' },
+  termWrap: { flex: 1, backgroundColor: '#000' },
+  webAbs: {
+    position: 'absolute', top: 0, left: 0, right: 0, bottom: 0,
+    backgroundColor: '#000',
+  },
+  webOff: { opacity: 0 },
   prow: {
     flexDirection: 'row', alignItems: 'center', gap: 6,
     padding: 9, borderRadius: 7, marginBottom: 3,

@@ -127,7 +127,15 @@ window.TC = {
   fit: fitNow,
   focus: function(){ term.focus(); },
   blurKeyboard: function(){ if (document.activeElement) document.activeElement.blur(); },
-  scroll: function(n){ term.scrollLines(n); }
+  scroll: function(n){ term.scrollLines(n); },
+  // Called when the app brings a kept-alive (pooled) terminal back to the
+  // front: report the real connection state and revive a dead socket.
+  wake: function(){
+    if (timer) { clearTimeout(timer); timer = null; }
+    if (!ws || ws.readyState > 1) { tries = 0; connect(); }
+    else notify({ type: ws.readyState === 1 ? "connected" : "disconnected" });
+    fitNow();
+  }
 };
 
 fitNow();
