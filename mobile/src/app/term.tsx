@@ -39,7 +39,7 @@ export default function Workspace() {
   const [copied, setCopied] = useState(false);
   const [dictating, setDictating] = useState(false);
   const [dictText, setDictText] = useState('');
-  const webRefs = useRef<Record<string, WebView | null>>({});
+  const web = useRef<WebView>(null);
   const lastSel = useRef('');
   const wide = useWindowDimensions().width >= 700;
 
@@ -47,20 +47,11 @@ export default function Workspace() {
   const project = projects.find((p) => p.id === projectId);
   const visible = projects.filter((p) => !p.hidden);
   const hidden = projects.filter((p) => p.hidden);
-  const activeKey = box && project ? `${box.id}:${project.id}` : '';
-
-  // Kept-alive terminal pool: the last few terminals stay mounted (hidden)
-  // with their websockets open, so switching back is instant — no page
-  // reload through the tunnel, no reconnect, scrollback intact.
-  const [pool, setPool] = useState<Array<{ key: string; box: Box; projectId: string }>>([]);
-  useEffect(() => {
-    if (!box || !project) return;
-    const key = `${box.id}:${project.id}`;
-    setPool((prev) => {
-      const rest = prev.filter((e) => e.key !== key);
-      return [...rest, { key, box, projectId: project.id }].slice(-3);
-    });
-  }, [box?.id, box?.token, project?.id]);
+  // NOTE: no kept-alive webview pool here — tried it for instant tab
+  // switching and it backfired: iOS suspends hidden WebViews (wedged app on
+  // re-show), and the extra tmux clients from other devices shrank every
+  // session to the smallest screen. One live terminal at a time; the asset
+  // cache keeps switches cheap.
 
   // sidebar/tab zoom for big monitors — 5 steps, persisted per device
   const ZOOMS = [0.85, 1, 1.15, 1.35, 1.6];
@@ -124,17 +115,8 @@ export default function Workspace() {
   }, [loadProjects, prefsReady]);
 
   const js = useCallback((code: string) => {
-    if (!activeKey) return;
-    webRefs.current[activeKey]?.injectJavaScript(`window.TC && (${code}); true;`);
-  }, [activeKey]);
-
-  // bringing a pooled terminal to the front: sync the status dot, revive a
-  // dead socket, refit
-  useEffect(() => {
-    if (!activeKey) return;
-    const t = setTimeout(() => js('TC.wake && TC.wake()'), 80);
-    return () => clearTimeout(t);
-  }, [activeKey, js]);
+    web.current?.injectJavaScript(`window.TC && (${code}); true;`);
+  }, []);
 
   const paste = async () => {
     const t = await Clipboard.getStringAsync();
@@ -284,45 +266,37 @@ export default function Workspace() {
                 {showHidden && hidden.map((p) => projectRow(p, true))}
               </ScrollView>
             )}
-            <View style={s.termWrap}>
-              {pool.map((e) => {
-                const isActive = e.key === activeKey;
-                return (
-                  <WebView
-                    key={e.key}
-                    ref={(r) => { webRefs.current[e.key] = r; }}
-                    source={{ uri: termUrl(e.box, e.projectId) }}
-                    style={[s.webAbs, !isActive && s.webOff]}
-                    pointerEvents={isActive ? 'auto' : 'none'}
-                    originWhitelist={['https://*', 'http://*']}
-                    keyboardDisplayRequiresUserAction={false}
-                    hideKeyboardAccessoryView
-                    allowsLinkPreview={false}
-                    setSupportMultipleWindows={false}
-                    onMessage={(ev) => {
-                      try {
-                        const m = JSON.parse(ev.nativeEvent.data);
-                        if (!isActive) return;      // background pool noise
-                        if (m.type === 'connected') setStatus('up');
-                        else if (m.type === 'disconnected') setStatus('connecting');
-                        else if (m.type === 'failed') setStatus('down');
-                        else if (m.type === 'selection' && m.text) {
-                          lastSel.current = m.text;
-                          void Clipboard.setStringAsync(m.text);
-                        }
-                      } catch { /* not ours */ }
-                    }}
-                  />
-                );
-              })}
-              {pool.length === 0 && (
-                <View style={[s.webAbs, s.center]}>
-                  <Text style={{ color: C.muted }}>
-                    {boxes.length ? 'Loading projects…' : 'No machines — go back and add one.'}
-                  </Text>
-                </View>
-              )}
-            </View>
+            {box && project ? (
+              <WebView
+                key={`${box.id}:${project.id}`}
+                ref={web}
+                source={{ uri: termUrl(box, project.id) }}
+                style={s.web}
+                originWhitelist={['https://*', 'http://*']}
+                keyboardDisplayRequiresUserAction={false}
+                hideKeyboardAccessoryView
+                allowsLinkPreview={false}
+                setSupportMultipleWindows={false}
+                onMessage={(ev) => {
+                  try {
+                    const m = JSON.parse(ev.nativeEvent.data);
+                    if (m.type === 'connected') setStatus('up');
+                    else if (m.type === 'disconnected') setStatus('connecting');
+                    else if (m.type === 'failed') setStatus('down');
+                    else if (m.type === 'selection' && m.text) {
+                      lastSel.current = m.text;
+                      void Clipboard.setStringAsync(m.text);
+                    }
+                  } catch { /* not ours */ }
+                }}
+              />
+            ) : (
+              <View style={[s.web, s.center]}>
+                <Text style={{ color: C.muted }}>
+                  {boxes.length ? 'Loading projects…' : 'No machines — go back and add one.'}
+                </Text>
+              </View>
+            )}
             <ScrollView
               horizontal keyboardShouldPersistTaps="always"
               showsHorizontalScrollIndicator={false}
@@ -430,12 +404,6 @@ const s = StyleSheet.create({
     backgroundColor: C.panel2, borderWidth: 1, borderColor: C.border,
   },
   zoomTxt: { color: C.muted, fontSize: 13, fontWeight: '600' },
-  termWrap: { flex: 1, backgroundColor: '#000' },
-  webAbs: {
-    position: 'absolute', top: 0, left: 0, right: 0, bottom: 0,
-    backgroundColor: '#000',
-  },
-  webOff: { opacity: 0 },
   prow: {
     flexDirection: 'row', alignItems: 'center', gap: 6,
     padding: 9, borderRadius: 7, marginBottom: 3,
