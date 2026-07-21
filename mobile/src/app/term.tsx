@@ -5,8 +5,8 @@
 // v1's list → list → terminal drill-down.
 import { useCallback, useEffect, useRef, useState } from 'react';
 import {
-  Alert, KeyboardAvoidingView, Platform, Pressable, ScrollView, StyleSheet,
-  Text, useWindowDimensions, View,
+  Alert, KeyboardAvoidingView, Modal, Platform, Pressable, ScrollView,
+  StyleSheet, Text, TextInput, useWindowDimensions, View,
 } from 'react-native';
 import { router, Stack, useFocusEffect, useLocalSearchParams } from 'expo-router';
 import { SafeAreaView } from 'react-native-safe-area-context';
@@ -37,6 +37,8 @@ export default function Workspace() {
   const [status, setStatus] = useState<'connecting' | 'up' | 'down'>('connecting');
   const [showHidden, setShowHidden] = useState(false);
   const [copied, setCopied] = useState(false);
+  const [dictating, setDictating] = useState(false);
+  const [dictText, setDictText] = useState('');
   const web = useRef<WebView>(null);
   const lastSel = useRef('');
   const wide = useWindowDimensions().width >= 700;
@@ -272,6 +274,10 @@ export default function Workspace() {
                 </Pressable>
               ))}
               <View style={s.sep} />
+              <Pressable style={[s.kbtn, s.kwide]}
+                onPress={() => { setDictText(''); setDictating(true); }}>
+                <Text style={s.klabel}>🎤 Dictate</Text>
+              </Pressable>
               <Pressable style={[s.kbtn, s.kwide]} onPress={paste}>
                 <Text style={s.klabel}>📋 Paste</Text>
               </Pressable>
@@ -289,6 +295,44 @@ export default function Workspace() {
           </View>
         </View>
       </KeyboardAvoidingView>
+
+      {/* 🎤 dictation box — iOS dictation streams partial phrases, and typing
+          those straight into xterm duplicates every fragment. A native input
+          captures it cleanly; Send bracketed-pastes it onto the prompt
+          WITHOUT running it, so you review and hit ⏎ yourself. */}
+      <Modal visible={dictating} transparent animationType="fade"
+        onRequestClose={() => setDictating(false)}>
+        <KeyboardAvoidingView
+          behavior={Platform.OS === 'ios' ? 'padding' : undefined}
+          style={s.dictWrap}
+        >
+          <View style={s.dictBox}>
+            <Text style={s.dictTitle}>🎤 Dictate to terminal</Text>
+            <Text style={s.dictHint}>
+              Tap the keyboard mic and speak — transcription stays clean here.
+              Send drops it on the prompt without running it.
+            </Text>
+            <TextInput
+              style={s.dictInput}
+              multiline autoFocus
+              placeholder="Speak or type here…" placeholderTextColor={C.muted}
+              value={dictText} onChangeText={setDictText}
+            />
+            <View style={s.dictBtns}>
+              <Pressable style={[s.kbtn, s.kwide]} onPress={() => setDictating(false)}>
+                <Text style={{ color: C.muted }}>Cancel</Text>
+              </Pressable>
+              <Pressable style={[s.kbtn, s.kwide, { backgroundColor: C.accent }]}
+                onPress={() => {
+                  if (dictText.trim()) js(`TC.paste(${JSON.stringify(dictText)})`);
+                  setDictating(false);
+                }}>
+                <Text style={{ color: C.bg, fontWeight: '600' }}>Send to terminal</Text>
+              </Pressable>
+            </View>
+          </View>
+        </KeyboardAvoidingView>
+      </Modal>
     </SafeAreaView>
   );
 }
@@ -348,6 +392,22 @@ const s = StyleSheet.create({
     backgroundColor: C.panel2, borderWidth: 1, borderColor: C.border,
     alignItems: 'center', justifyContent: 'center',
   },
+  dictWrap: {
+    flex: 1, backgroundColor: 'rgba(0,0,0,.6)',
+    justifyContent: 'center', padding: 22,
+  },
+  dictBox: {
+    backgroundColor: C.panel, borderRadius: 12, padding: 16,
+    borderWidth: 1, borderColor: C.border, gap: 10,
+  },
+  dictTitle: { color: C.text, fontSize: 16, fontWeight: '600' },
+  dictHint: { color: C.muted, fontSize: 12.5, lineHeight: 18 },
+  dictInput: {
+    minHeight: 120, maxHeight: 260, textAlignVertical: 'top',
+    backgroundColor: C.bg, borderColor: C.border, borderWidth: 1,
+    borderRadius: 8, color: C.text, padding: 11, fontSize: 16,
+  },
+  dictBtns: { flexDirection: 'row', gap: 8, justifyContent: 'flex-end' },
   kwide: { paddingHorizontal: 14 },
   klabel: { color: C.text, fontSize: 14 },
   sep: { width: 1, height: 24, backgroundColor: C.border, marginHorizontal: 4 },
