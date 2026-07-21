@@ -47,6 +47,7 @@ export default function Workspace() {
   const [copied, setCopied] = useState(false);
   const [dictating, setDictating] = useState(false);
   const [dictText, setDictText] = useState('');
+  const [histText, setHistText] = useState<string | null>(null);   // 🕘 modal
   const web = useRef<WebView>(null);
   const lastSel = useRef('');
   const wide = useWindowDimensions().width >= 700;
@@ -411,6 +412,18 @@ export default function Workspace() {
                 onPress={toggleMouse}>
                 <Text style={[s.klabel, mouseOn && { color: C.accent }]}>📜</Text>
               </Pressable>
+              {/* 🕘 scrollback reader — touch terminals can't reliably drive
+                  tmux copy-mode, so history gets a native scrolling view */}
+              <Pressable style={s.kbtn} onPress={async () => {
+                if (!box || !project) return;
+                setHistText('');
+                try {
+                  const r = await termCapture(box, project.id);
+                  setHistText(r.content.replace(/\s+$/, ''));
+                } catch { setHistText('(could not load history)'); }
+              }}>
+                <Text style={s.klabel}>🕘</Text>
+              </Pressable>
               {/* dismisses the phone's on-screen keyboard — pointless with a
                   hardware keyboard, so wide screens don't get it */}
               {!wide && !nativeOn && (
@@ -431,6 +444,37 @@ export default function Workspace() {
           </View>
         </View>
       </KeyboardAvoidingView>
+
+      {/* 🕘 history: the session's last 2000 lines in a native scroll view —
+          momentum scrolling + iOS text selection, independent of terminal
+          gesture quirks in either terminal mode */}
+      <Modal visible={histText !== null} transparent animationType="fade"
+        onRequestClose={() => setHistText(null)}>
+        <View style={s.dictWrap}>
+          <View style={[s.dictBox, { flex: 1, marginVertical: 30 }]}>
+            <Text style={s.dictTitle}>🕘 Scrollback</Text>
+            <ScrollView
+              style={s.histScroll}
+              ref={(r) => { if (r && histText) r.scrollToEnd({ animated: false }); }}
+            >
+              <Text selectable style={s.histText}>
+                {histText === '' ? 'Loading…' : histText}
+              </Text>
+            </ScrollView>
+            <View style={s.dictBtns}>
+              <Pressable style={[s.kbtn, s.kwide]} onPress={async () => {
+                if (histText) await Clipboard.setStringAsync(histText);
+              }}>
+                <Text style={{ color: C.muted }}>Copy all</Text>
+              </Pressable>
+              <Pressable style={[s.kbtn, s.kwide, { backgroundColor: C.accent }]}
+                onPress={() => setHistText(null)}>
+                <Text style={{ color: C.bg, fontWeight: '600' }}>Close</Text>
+              </Pressable>
+            </View>
+          </View>
+        </View>
+      </Modal>
 
       {/* 🎤 dictation box — iOS dictation streams partial phrases, and typing
           those straight into xterm duplicates every fragment. A native input
@@ -553,6 +597,14 @@ const s = StyleSheet.create({
     borderRadius: 8, color: C.text, padding: 11, fontSize: 16,
   },
   dictBtns: { flexDirection: 'row', gap: 8, justifyContent: 'flex-end' },
+  histScroll: {
+    flex: 1, backgroundColor: '#000', borderRadius: 8,
+    borderWidth: 1, borderColor: C.border, padding: 8,
+  },
+  histText: {
+    color: C.text, fontSize: 12,
+    fontFamily: Platform.OS === 'ios' ? 'Menlo' : 'monospace',
+  },
   kwide: { paddingHorizontal: 14 },
   klabel: { color: C.text, fontSize: 14 },
   sep: { width: 1, height: 24, backgroundColor: C.border, marginHorizontal: 4 },
