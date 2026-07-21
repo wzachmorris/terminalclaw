@@ -45,7 +45,9 @@ export default function Machines() {
           return (
             <Pressable
               style={s.card}
-              onPress={() => alive ? router.push(`/box/${item.id}`) : setEditing(item)}
+              onPress={() => alive
+                ? router.push({ pathname: '/term', params: { box: item.id } })
+                : setEditing(item)}
               onLongPress={() => remove(item)}
             >
               <View style={[s.dot, { backgroundColor: alive ? C.green : C.amber }]} />
