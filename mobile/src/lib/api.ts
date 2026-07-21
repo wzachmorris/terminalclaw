@@ -82,3 +82,14 @@ export async function termBuffer(box: Box): Promise<{ content: string }> {
     headers: { 'X-TC-Token': box.token },
   });
 }
+
+// Toggle tmux mouse/scroll mode for a project's session (📜). Returns the
+// new state ("on"/"off"); on = swipe scrolls history, off = selection mode.
+export async function termMouse(box: Box, project: string, on: boolean):
+    Promise<{ mouse: string }> {
+  return req(`${box.url}/api/term/mouse`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', 'X-TC-Token': box.token },
+    body: JSON.stringify({ project, on }),
+  });
+}

@@ -15,7 +15,7 @@ import * as Clipboard from 'expo-clipboard';
 import * as SecureStore from 'expo-secure-store';
 import {
   deleteProject, getProjects, Project, setProjectHidden, termBuffer,
-  termCapture, termUrl,
+  termCapture, termMouse, termUrl,
 } from '@/lib/api';
 import { Box, loadBoxes, tokenAlive } from '@/lib/boxes';
 import { C } from '@/lib/theme';
@@ -167,6 +167,18 @@ export default function Workspace() {
   const paste = async () => {
     const t = await Clipboard.getStringAsync();
     if (t) sendPaste(t);
+  };
+
+  // 📜 tmux mouse/scroll mode — on by default fleet-wide (term.sh); this
+  // toggles it per-session for when you want selection-style dragging.
+  const [mouseOn, setMouseOn] = useState(true);
+  useEffect(() => { setMouseOn(true); }, [projectId]);  // sessions default on
+  const toggleMouse = async () => {
+    if (!box || !project) return;
+    try {
+      const r = await termMouse(box, project.id, !mouseOn);
+      setMouseOn(r.mouse === 'on');
+    } catch { /* leave as-is */ }
   };
 
   // Copy priority: (1) the tmux paste buffer — with mouse mode on, a drag
@@ -393,6 +405,11 @@ export default function Workspace() {
               </Pressable>
               <Pressable style={[s.kbtn, s.kwide]} onPress={copyOut}>
                 <Text style={s.klabel}>{copied ? '✓ Copied' : '📄 Copy'}</Text>
+              </Pressable>
+              <Pressable
+                style={[s.kbtn, mouseOn && { borderColor: C.accent }]}
+                onPress={toggleMouse}>
+                <Text style={[s.klabel, mouseOn && { color: C.accent }]}>📜</Text>
               </Pressable>
               {/* dismisses the phone's on-screen keyboard — pointless with a
                   hardware keyboard, so wide screens don't get it */}

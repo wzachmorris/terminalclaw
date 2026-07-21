@@ -62,6 +62,10 @@ python3 "$HUB_DIR/gen_claude_md.py" "$PROJ" >/dev/null 2>&1 || true
 # one — otherwise a phone peeking at a session shrinks it to a corner of a
 # 4K desktop view. (No-op on tmux too old to know the option.)
 tmux set -wg window-size latest 2>/dev/null || true
+# Mouse mode on by default: swipe/wheel scrolls history (the only workable
+# touch scrolling), drag copies to the tmux buffer (which the apps' Copy
+# button reads). The dashboards' 📜 toggle still flips it per-session.
+tmux set -g mouse on 2>/dev/null || true
 
 clear
 echo "🐾 ${NAME} — project agent"
