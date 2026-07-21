@@ -769,6 +769,15 @@ def term_capture(project, lines):
     return out.stdout
 
 
+def term_buffer():
+    """Most recent tmux paste buffer — what a mouse-mode drag just copied
+    ('N characters copied to the tmux buffer'). Buffers are global to the
+    tmux server, so no project target is needed; empty string if none."""
+    out = subprocess.run(["tmux", "show-buffer"],
+                         capture_output=True, text=True, timeout=5)
+    return out.stdout if out.returncode == 0 else ""
+
+
 def browse_dir(dirpath):
     """List a directory for the file picker (dirs first, then files). Read-only;
     auth-gated at the route. Falls back to $HOME for a missing/blank dir."""
@@ -1247,6 +1256,16 @@ class Handler(BaseHTTPRequestHandler):
             if txt is None:
                 return self._send(404, {"error": "not found"})
             return self._send(200, {"content": txt})
+
+        if path == "/api/term/buffer":
+            # Latest tmux paste buffer — the mobile app's Copy button prefers
+            # this: with tmux mouse mode on, a drag lands here, not in xterm.
+            if not self._authed():
+                return self._send(401, {"error": "unauthorized"})
+            try:
+                return self._send(200, {"content": term_buffer()})
+            except Exception as e:
+                return self._send(500, {"error": str(e)})
 
         if path == "/api/term/capture":
             # Terminal scrollback as text — backs the Copy button.

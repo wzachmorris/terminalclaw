@@ -74,3 +74,11 @@ export async function termCapture(box: Box, project: string):
     headers: { 'X-TC-Token': box.token },
   });
 }
+
+// Latest tmux paste buffer — what a mouse-mode drag just copied. The Copy
+// button's first choice: it's exactly what the user watched tmux capture.
+export async function termBuffer(box: Box): Promise<{ content: string }> {
+  return req(`${box.url}/api/term/buffer`, {
+    headers: { 'X-TC-Token': box.token },
+  });
+}

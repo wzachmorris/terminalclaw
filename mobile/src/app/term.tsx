@@ -13,7 +13,8 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import { WebView } from 'react-native-webview';
 import * as Clipboard from 'expo-clipboard';
 import {
-  deleteProject, getProjects, Project, setProjectHidden, termCapture, termUrl,
+  deleteProject, getProjects, Project, setProjectHidden, termBuffer,
+  termCapture, termUrl,
 } from '@/lib/api';
 import { Box, loadBoxes, tokenAlive } from '@/lib/boxes';
 import { C } from '@/lib/theme';
@@ -78,11 +79,16 @@ export default function Workspace() {
     if (t) js(`TC.paste(${JSON.stringify(t)})`);
   };
 
-  // Copy = current/last selection if there is one, else the whole scrollback
-  // (server-side capture-pane, same as the web dashboard's Copy button).
+  // Copy priority: (1) the tmux paste buffer — with mouse mode on, a drag
+  // lands there ("N characters copied to the tmux buffer"), which is exactly
+  // what the user just watched happen; (2) xterm's own selection (mouse mode
+  // off); (3) the whole scrollback via capture-pane.
   const copyOut = async () => {
-    let text = lastSel.current;
-    if (!text && box && project) {
+    if (!box) return;
+    let text = '';
+    try { text = (await termBuffer(box)).content; } catch { /* fall through */ }
+    if (!text) text = lastSel.current;
+    if (!text && project) {
       try { text = (await termCapture(box, project.id)).content; } catch { return; }
     }
     if (!text) return;
@@ -251,9 +257,13 @@ export default function Workspace() {
               <Pressable style={[s.kbtn, s.kwide]} onPress={copyOut}>
                 <Text style={s.klabel}>{copied ? '✓ Copied' : '📄 Copy'}</Text>
               </Pressable>
-              <Pressable style={[s.kbtn, s.kwide]} onPress={() => js('TC.blurKeyboard()')}>
-                <Text style={s.klabel}>⌨ Hide</Text>
-              </Pressable>
+              {/* dismisses the phone's on-screen keyboard — pointless with a
+                  hardware keyboard, so wide screens don't get it */}
+              {!wide && (
+                <Pressable style={[s.kbtn, s.kwide]} onPress={() => js('TC.blurKeyboard()')}>
+                  <Text style={s.klabel}>⌨ Hide</Text>
+                </Pressable>
+              )}
             </ScrollView>
           </View>
         </View>
