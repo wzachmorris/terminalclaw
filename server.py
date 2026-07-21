@@ -1124,6 +1124,13 @@ class Handler(BaseHTTPRequestHandler):
                 # /api/login does its own password check + rate limit; it must
                 # be reachable without a session or the app could never log in.
                 return self._send(200, "ok", "text/plain")
+            # A valid session token in the query also passes: the app's
+            # terminal page (term.html?token=...) plants the cookie via JS,
+            # so its own page load arrives cookieless — the token in the URL
+            # is the only credential it can carry on that first request.
+            qtok = parse_qs(urlparse(fwd).query).get("token", [""])[0]
+            if qtok and token_valid(qtok):
+                return self._send(200, "ok", "text/plain")
             tok = (cookie_value(self.headers, COOKIE)
                    or self.headers.get("X-TC-Token"))
             if tok and token_valid(tok):
