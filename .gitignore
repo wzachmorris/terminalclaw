@@ -32,6 +32,9 @@ docs/*essentials*
 *.bak
 *.bak.*
 
+# Signed mobile builds pulled from the app-latest release (update-app.sh)
+ota/
+
 # Python bytecode
 __pycache__/
 *.pyc

@@ -35,10 +35,11 @@ import secrets
 import subprocess
 import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
-from urllib.parse import urlparse, parse_qs
+from urllib.parse import urlparse, parse_qs, quote
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 REGISTRY = os.path.join(HERE, "projects.json")
+OTA_IPA = "terminalclaw.ipa"      # served from ota/ by the public /app routes
 # Directories of read-only .md files surfaced in the dashboard. Override via
 # env to point at wherever your agent memory / notes live on this box.
 MEMORY_DIR = os.environ.get("HUB_MEMORY_DIR", os.path.join(HERE, "memory"))
@@ -1115,11 +1116,69 @@ class Handler(BaseHTTPRequestHandler):
             # Caddy forward_auth target: 200 = allow, 302 = bounce to login.
             # forward_auth copies the original request headers, so the mobile
             # app can pass X-TC-Token on requests that can't carry the cookie.
+            # The OTA install routes are public by design (iOS fetches the
+            # manifest/ipa with no cookies; the build is UDID-locked anyway).
+            fwd = self.headers.get("X-Forwarded-Uri", "")
+            if fwd == "/app" or fwd.startswith("/app/"):
+                return self._send(200, "ok", "text/plain")
             tok = (cookie_value(self.headers, COOKIE)
                    or self.headers.get("X-TC-Token"))
             if tok and token_valid(tok):
                 return self._send(200, "ok", "text/plain")
             return self._redirect("/gate/login")
+
+        # --- OTA install page for the mobile app (public; same pattern as the
+        # notes app). update-app.sh pulls the signed ipa from the app-latest
+        # GitHub release into ota/ where these routes serve it. Ad-hoc signed
+        # -> runs only on registered UDIDs, so open serving is fine.
+        if path == "/app":
+            base = "https://%s/app" % self.headers.get("Host", "")
+            has_ipa = os.path.isfile(os.path.join(HERE, "ota", OTA_IPA))
+            body = (
+                '<a href="itms-services://?action=download-manifest&url=%s"'
+                ' style="background:#0a84ff;color:#fff;padding:16px 32px;'
+                'border-radius:12px;text-decoration:none;font-size:20px">'
+                'Install on iPhone</a>'
+                '<p style="color:#888">On a Mac: <a href="%s" style="color:#0a84ff">'
+                'download the .ipa</a> and double-click it.</p>'
+                % (quote(base + "/manifest.plist", safe=""), base + "/" + OTA_IPA)
+                if has_ipa else "<p>No build uploaded yet.</p>")
+            return self._send(200,
+                '<!doctype html><meta name="viewport" content="width=device-width, initial-scale=1">'
+                '<title>TerminalClaw app</title>'
+                '<body style="font-family:-apple-system,sans-serif;background:#0d1117;color:#e6edf3;'
+                'display:flex;flex-direction:column;align-items:center;justify-content:center;'
+                'min-height:90vh;gap:24px"><h1 style="margin:0">🦀 TerminalClaw</h1>' + body,
+                "text/html; charset=utf-8")
+
+        if path == "/app/manifest.plist":
+            base = "https://%s/app" % self.headers.get("Host", "")
+            return self._send(200, """<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0"><dict><key>items</key><array><dict>
+  <key>assets</key><array><dict>
+    <key>kind</key><string>software-package</string>
+    <key>url</key><string>%s/%s</string>
+  </dict></array>
+  <key>metadata</key><dict>
+    <key>bundle-identifier</key><string>com.zacmorriss.terminalclaw</string>
+    <key>bundle-version</key><string>1.0.0</string>
+    <key>kind</key><string>software</string>
+    <key>title</key><string>TerminalClaw</string>
+  </dict>
+</dict></array></dict></plist>""" % (base, OTA_IPA), "application/xml")
+
+        if path == "/app/" + OTA_IPA:
+            fp = os.path.join(HERE, "ota", OTA_IPA)
+            if not os.path.isfile(fp):
+                return self._send(404, {"error": "no build"})
+            with open(fp, "rb") as f:
+                data = f.read()
+            self.send_response(200)
+            self.send_header("Content-Type", "application/octet-stream")
+            self.send_header("Content-Length", str(len(data)))
+            self.end_headers()
+            return self.wfile.write(data)
 
         if path == "/" or path == "/index.html":
             try:
