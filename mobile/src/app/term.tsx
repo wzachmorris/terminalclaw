@@ -77,6 +77,11 @@ export default function Workspace() {
   };
   const Z = ZOOMS[zoomI];
 
+  // dynamic tab spacing: rows stretch to fill the sidebar, redistributing
+  // when tabs are hidden/added — clamped so few tabs don't balloon and many
+  // tabs still scroll
+  const [sideH, setSideH] = useState(0);
+
   // last-opened project per box — switching machines (or relaunching the
   // app) drops you back on the tab you left, not the first one
   const lastByBox = useRef<Record<string, string>>({});
@@ -219,6 +224,15 @@ export default function Workspace() {
     if (b.id !== boxId) { setProjectId(undefined); setProjects([]); setBoxId(b.id); }
   };
 
+  // stretch rows to consume the sidebar: available height / slot count,
+  // clamped between a dense minimum and a billboard maximum (both zoomed)
+  const slots = visible.length + (showHidden ? hidden.length : 0);
+  const availH = sideH - 46 /* zoom bar */ - 12 /* padding */ -
+    (hidden.length ? 30 : 0) /* hidden header */;
+  const rowH = slots > 0 && availH > 0
+    ? Math.max(34 * Z, Math.min(84 * Z, availH / slots - 3))
+    : 40 * Z;
+
   const projectRow = (p: Project, compact: boolean) => (
     <Pressable
       key={p.id}
@@ -226,7 +240,7 @@ export default function Workspace() {
         compact ? s.pchip : s.prow,
         compact
           ? { paddingHorizontal: 10 * Z, paddingVertical: 6 * Z }
-          : { padding: 9 * Z },
+          : { height: rowH, paddingHorizontal: 9 * Z },
         { borderLeftColor: p.color ?? 'transparent' },
         p.id === projectId && s.pactive,
         p.hidden && { opacity: 0.5 },
@@ -274,7 +288,10 @@ export default function Workspace() {
         <View style={s.body}>
           {/* wide: persistent project sidebar */}
           {wide && (
-            <View style={[s.sidebar, { width: 190 * Z }]}>
+            <View
+              style={[s.sidebar, { width: 190 * Z }]}
+              onLayout={(e) => setSideH(e.nativeEvent.layout.height)}
+            >
               <ScrollView contentContainerStyle={{ padding: 6 }}>
                 {visible.map((p) => projectRow(p, false))}
                 {hidden.length > 0 && (
