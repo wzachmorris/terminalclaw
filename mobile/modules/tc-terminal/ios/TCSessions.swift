@@ -135,6 +135,12 @@ extension TCSession: TerminalViewDelegate {
 
     public func scrolled(source: TerminalView, position: Double) {}
 
+    public func requestOpenLink(source: TerminalView, link: String, params: [String: String]) {
+        if let url = URL(string: link) {
+            DispatchQueue.main.async { UIApplication.shared.open(url) }
+        }
+    }
+
     public func clipboardCopy(source: TerminalView, content: Data) {
         // OSC-52 from tmux/vim lands straight on the system clipboard.
         if let s = String(data: content, encoding: .utf8) {
