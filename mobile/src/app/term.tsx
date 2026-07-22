@@ -15,7 +15,7 @@ import * as Clipboard from 'expo-clipboard';
 import * as SecureStore from 'expo-secure-store';
 import {
   deleteProject, getProjects, Project, setProjectHidden, termBuffer,
-  termCapture, termMouse, termUrl,
+  termCapture, termKey, termMouse, termPaste, termUrl,
 } from '@/lib/api';
 import { Box, loadBoxes, tokenAlive } from '@/lib/boxes';
 import { C } from '@/lib/theme';
@@ -144,6 +144,45 @@ export default function Workspace() {
     if (!next) TCTerminal?.disconnectAll();
     setStatus('connecting');
   };
+  // 📖 reader mode — the session as plain text in a native scroll view,
+  // polled from the server (capture-pane); input goes through the server's
+  // send-keys/paste endpoints. No terminal engine involved, so selection,
+  // copy, and momentum scrolling behave like any normal app. Phones default
+  // to reader (reading + dictation IS the phone workflow); wide screens
+  // default to the live terminal.
+  const [readerPref, setReaderPref] = useState<string | null>(null);
+  useEffect(() => {
+    void SecureStore.getItemAsync('tc.reader').then(setReaderPref);
+  }, []);
+  const readerOn = readerPref === '1' || (readerPref !== '0' && !wide);
+  const toggleReader = () => {
+    const next = readerOn ? '0' : '1';
+    setReaderPref(next);
+    void SecureStore.setItemAsync('tc.reader', next);
+    setStatus('connecting');
+  };
+  const [readerText, setReaderText] = useState('');
+  const readerScroll = useRef<ScrollView | null>(null);
+  const readerPinned = useRef(true);   // stick to the bottom unless scrolled up
+  useEffect(() => {
+    if (!readerOn || !box || !project) return;
+    const b = box, pid = project.id;
+    setReaderText('');
+    readerPinned.current = true;
+    let live = true;
+    const pull = async () => {
+      try {
+        const r = await termCapture(b, pid);
+        if (!live) return;
+        setReaderText(r.content.replace(/\s+$/, ''));
+        setStatus('up');
+      } catch { if (live) setStatus('down'); }
+    };
+    void pull();
+    const t = setInterval(() => void pull(), 2000);
+    return () => { live = false; clearInterval(t); };
+  }, [readerOn, box?.id, box?.token, project?.id]);
+
   const sessionKey = box && project
     ? `${box.id}:${project.id}:${box.token.slice(-8)}` : '';
   const wsEndpoint = box && project
@@ -155,13 +194,16 @@ export default function Workspace() {
     web.current?.injectJavaScript(`window.TC && (${code}); true;`);
   }, []);
 
-  // one input path for both terminals
+  // one input path for the terminals and the reader. Reader input rides the
+  // server's send-keys/paste endpoints — no live terminal connection needed.
   const sendKey = (k: string) => {
-    if (nativeOn && sessionKey) TCTerminal!.send(sessionKey, SEQ[k] ?? k);
+    if (readerOn) { if (box && project) void termKey(box, project.id, k).catch(() => {}); }
+    else if (nativeOn && sessionKey) TCTerminal!.send(sessionKey, SEQ[k] ?? k);
     else js(`TC.key(${JSON.stringify(k)})`);
   };
   const sendPaste = (t: string) => {
-    if (nativeOn && sessionKey) TCTerminal!.send(sessionKey, `\u001b[200~${t}\u001b[201~`);
+    if (readerOn) { if (box && project) void termPaste(box, project.id, t).catch(() => {}); }
+    else if (nativeOn && sessionKey) TCTerminal!.send(sessionKey, `\u001b[200~${t}\u001b[201~`);
     else js(`TC.paste(${JSON.stringify(t)})`);
   };
 
@@ -189,6 +231,7 @@ export default function Workspace() {
   const copyOut = async () => {
     if (!box) return;
     let text = '';
+    if (readerOn) text = readerText;   // reader: Copy = copy everything shown
     if (nativeOn && sessionKey) {
       try { text = await TCTerminal!.getSelection(sessionKey); } catch { /* fall through */ }
     }
@@ -342,7 +385,28 @@ export default function Workspace() {
                 {showHidden && hidden.map((p) => projectRow(p, true))}
               </ScrollView>
             )}
-            {box && project && nativeOn && TCTerminalView ? (
+            {box && project && readerOn ? (
+              /* 📖 reader — plain text, native scrolling/selection; sticks to
+                 the bottom while new output streams unless you scroll up */
+              <ScrollView
+                ref={readerScroll}
+                style={s.reader}
+                contentContainerStyle={s.readerInner}
+                scrollEventThrottle={100}
+                onScroll={(e) => {
+                  const { contentOffset, layoutMeasurement, contentSize } = e.nativeEvent;
+                  readerPinned.current =
+                    contentOffset.y + layoutMeasurement.height >= contentSize.height - 60;
+                }}
+                onContentSizeChange={() => {
+                  if (readerPinned.current) readerScroll.current?.scrollToEnd({ animated: false });
+                }}
+              >
+                <Text selectable style={s.histText}>
+                  {readerText || 'Loading…'}
+                </Text>
+              </ScrollView>
+            ) : box && project && nativeOn && TCTerminalView ? (
               <TCTerminalView
                 key={sessionKey}
                 sessionKey={sessionKey}
@@ -402,22 +466,24 @@ export default function Workspace() {
               <Pressable style={[s.kbtn, s.kwide]} onPress={copyOut}>
                 <Text style={s.klabel}>{copied ? '✓ Copied' : '📄 Copy'}</Text>
               </Pressable>
-              {/* 🕘 scrollback reader — the one readback path that works on
-                  touch: server-side capture in a native scroll view */}
-              <Pressable style={s.kbtn} onPress={async () => {
-                if (!box || !project) return;
-                setHistText('');
-                try {
-                  const r = await termCapture(box, project.id);
-                  setHistText(r.content.replace(/\s+$/, ''));
-                } catch { setHistText('(could not load history)'); }
-              }}>
-                <Text style={s.klabel}>🕘</Text>
-              </Pressable>
+              {/* 🕘 scrollback modal — redundant while the reader (which IS
+                  the scrollback) is the front view */}
+              {!readerOn && (
+                <Pressable style={s.kbtn} onPress={async () => {
+                  if (!box || !project) return;
+                  setHistText('');
+                  try {
+                    const r = await termCapture(box, project.id);
+                    setHistText(r.content.replace(/\s+$/, ''));
+                  } catch { setHistText('(could not load history)'); }
+                }}>
+                  <Text style={s.klabel}>🕘</Text>
+                </Pressable>
+              )}
               {/* 📜 tmux mouse mode only matters where real wheel events exist
                   (trackpad/mouse). On phones a swipe becomes a tmux drag, not a
                   scroll — the toggle is invisible there, so don't show it. */}
-              {wide && (
+              {wide && !readerOn && (
                 <Pressable
                   style={[s.kbtn, mouseOn && { borderColor: C.accent }]}
                   onPress={toggleMouse}>
@@ -433,20 +499,28 @@ export default function Workspace() {
               ))}
               {/* dismisses the phone's on-screen keyboard — pointless with a
                   hardware keyboard, so wide screens don't get it */}
-              {!wide && !nativeOn && (
+              {!wide && !nativeOn && !readerOn && (
                 <Pressable style={[s.kbtn, s.kwide]} onPress={() => js('TC.blurKeyboard()')}>
                   <Text style={s.klabel}>⌨ Hide</Text>
                 </Pressable>
               )}
               {/* ⚡ v2 native terminal (SwiftTerm) — only offered when this
                   binary contains the module; WebView remains the fallback */}
-              {!!TCTerminalView && (
+              {!!TCTerminalView && !readerOn && (
                 <Pressable
                   style={[s.kbtn, s.kwide, nativeOn && { borderColor: C.accent }]}
                   onPress={toggleNative}>
                   <Text style={[s.klabel, nativeOn && { color: C.accent }]}>⚡</Text>
                 </Pressable>
               )}
+              {/* 📖 reader ↔ 🖥 live terminal */}
+              <Pressable
+                style={[s.kbtn, s.kwide, readerOn && { borderColor: C.accent }]}
+                onPress={toggleReader}>
+                <Text style={[s.klabel, readerOn && { color: C.accent }]}>
+                  {readerOn ? '🖥 Term' : '📖 Read'}
+                </Text>
+              </Pressable>
             </ScrollView>
           </View>
         </View>
@@ -577,6 +651,8 @@ const s = StyleSheet.create({
   },
   pstripInner: { padding: 5, gap: 5, alignItems: 'center' },
   web: { flex: 1, backgroundColor: '#000' },
+  reader: { flex: 1, backgroundColor: '#000' },
+  readerInner: { padding: 10, paddingBottom: 20 },
   center: { alignItems: 'center', justifyContent: 'center' },
   bar: {
     flexGrow: 0, backgroundColor: C.panel,

@@ -93,3 +93,22 @@ export async function termMouse(box: Box, project: string, on: boolean):
     body: JSON.stringify({ project, on }),
   });
 }
+
+// Server-side input for 📖 reader mode — tmux send-keys / bracketed paste,
+// so no terminal connection is needed to drive a session. `key` must be in
+// the server's whitelist (arrows/enter/esc/space/tab/btab/ctrl-c/digits).
+export async function termKey(box: Box, project: string, key: string) {
+  return req(`${box.url}/api/term/key`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', 'X-TC-Token': box.token },
+    body: JSON.stringify({ project, key }),
+  });
+}
+
+export async function termPaste(box: Box, project: string, text: string) {
+  return req(`${box.url}/api/term/paste`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', 'X-TC-Token': box.token },
+    body: JSON.stringify({ project, text }),
+  });
+}
