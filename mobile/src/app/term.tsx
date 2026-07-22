@@ -402,20 +402,8 @@ export default function Workspace() {
               <Pressable style={[s.kbtn, s.kwide]} onPress={copyOut}>
                 <Text style={s.klabel}>{copied ? '✓ Copied' : '📄 Copy'}</Text>
               </Pressable>
-              <Pressable
-                style={[s.kbtn, mouseOn && { borderColor: C.accent }]}
-                onPress={toggleMouse}>
-                <Text style={[s.klabel, mouseOn && { color: C.accent }]}>📜</Text>
-              </Pressable>
-              <View style={s.sep} />
-              {KEYS.map((k) => (
-                <Pressable key={k.key} style={[s.kbtn, k.wide && s.kwide]}
-                  onPress={() => sendKey(k.key)}>
-                  <Text style={s.klabel}>{k.label}</Text>
-                </Pressable>
-              ))}
-              {/* 🕘 scrollback reader — touch terminals can't reliably drive
-                  tmux copy-mode, so history gets a native scrolling view */}
+              {/* 🕘 scrollback reader — the one readback path that works on
+                  touch: server-side capture in a native scroll view */}
               <Pressable style={s.kbtn} onPress={async () => {
                 if (!box || !project) return;
                 setHistText('');
@@ -426,6 +414,23 @@ export default function Workspace() {
               }}>
                 <Text style={s.klabel}>🕘</Text>
               </Pressable>
+              {/* 📜 tmux mouse mode only matters where real wheel events exist
+                  (trackpad/mouse). On phones a swipe becomes a tmux drag, not a
+                  scroll — the toggle is invisible there, so don't show it. */}
+              {wide && (
+                <Pressable
+                  style={[s.kbtn, mouseOn && { borderColor: C.accent }]}
+                  onPress={toggleMouse}>
+                  <Text style={[s.klabel, mouseOn && { color: C.accent }]}>📜</Text>
+                </Pressable>
+              )}
+              <View style={s.sep} />
+              {KEYS.map((k) => (
+                <Pressable key={k.key} style={[s.kbtn, k.wide && s.kwide]}
+                  onPress={() => sendKey(k.key)}>
+                  <Text style={s.klabel}>{k.label}</Text>
+                </Pressable>
+              ))}
               {/* dismisses the phone's on-screen keyboard — pointless with a
                   hardware keyboard, so wide screens don't get it */}
               {!wide && !nativeOn && (
