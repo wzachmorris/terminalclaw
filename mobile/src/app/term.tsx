@@ -390,13 +390,8 @@ export default function Workspace() {
               showsHorizontalScrollIndicator={false}
               style={s.bar} contentContainerStyle={s.barInner}
             >
-              {KEYS.map((k) => (
-                <Pressable key={k.key} style={[s.kbtn, k.wide && s.kwide]}
-                  onPress={() => sendKey(k.key)}>
-                  <Text style={s.klabel}>{k.label}</Text>
-                </Pressable>
-              ))}
-              <View style={s.sep} />
+              {/* the heavy-rotation buttons live first: dictate/paste/copy/scroll
+                  are the phone workflow; the key row scrolls in behind them */}
               <Pressable style={[s.kbtn, s.kwide]}
                 onPress={() => { setDictText(''); setDictating(true); }}>
                 <Text style={s.klabel}>🎤 Dictate</Text>
@@ -412,6 +407,13 @@ export default function Workspace() {
                 onPress={toggleMouse}>
                 <Text style={[s.klabel, mouseOn && { color: C.accent }]}>📜</Text>
               </Pressable>
+              <View style={s.sep} />
+              {KEYS.map((k) => (
+                <Pressable key={k.key} style={[s.kbtn, k.wide && s.kwide]}
+                  onPress={() => sendKey(k.key)}>
+                  <Text style={s.klabel}>{k.label}</Text>
+                </Pressable>
+              ))}
               {/* 🕘 scrollback reader — touch terminals can't reliably drive
                   tmux copy-mode, so history gets a native scrolling view */}
               <Pressable style={s.kbtn} onPress={async () => {
