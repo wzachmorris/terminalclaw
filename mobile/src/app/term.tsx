@@ -167,6 +167,8 @@ export default function Workspace() {
   const [chatAvail, setChatAvail] = useState<boolean | null>(null);
   const chatSince = useRef('');
   const chatActive = chatOn && chatAvail !== false;
+  // phone chat = lean bar: Dictate, Copy, 🕘, Esc, ⏎, mode toggle
+  const lean = chatActive && !wide;
   useEffect(() => {
     if (!chatOn || !box || !project) return;
     const b = box, pid = project.id;
@@ -228,6 +230,20 @@ export default function Workspace() {
   const paste = async () => {
     const t = await Clipboard.getStringAsync();
     if (t) sendPaste(t);
+  };
+  // paste + ⏎ — actually submits the message instead of leaving it on the
+  // prompt for review; sequential so Enter can't outrun the paste
+  const sendSubmit = async (t: string) => {
+    if (chatActive) {
+      if (!box || !project) return;
+      try {
+        await termPaste(box, project.id, t);
+        await termKey(box, project.id, 'enter');
+      } catch { /* next poll shows reality */ }
+    } else {
+      sendPaste(t);
+      setTimeout(() => sendKey('enter'), 200);
+    }
   };
 
   // 📜 tmux mouse/scroll mode — on by default fleet-wide (term.sh); this
@@ -494,15 +510,19 @@ export default function Workspace() {
               showsHorizontalScrollIndicator={false}
               style={s.bar} contentContainerStyle={s.barInner}
             >
-              {/* the heavy-rotation buttons live first: dictate/paste/copy/scroll
-                  are the phone workflow; the key row scrolls in behind them */}
+              {/* the heavy-rotation buttons live first: dictate/copy are the
+                  phone workflow; the key row scrolls in behind them. Phone
+                  chat gets the lean bar — Dictate covers typing AND pasting
+                  (paste into its box), so the rest is clutter there */}
               <Pressable style={[s.kbtn, s.kwide]}
                 onPress={() => { setDictText(''); setDictating(true); }}>
                 <Text style={s.klabel}>🎤 Dictate</Text>
               </Pressable>
-              <Pressable style={[s.kbtn, s.kwide]} onPress={paste}>
-                <Text style={s.klabel}>📋 Paste</Text>
-              </Pressable>
+              {!lean && (
+                <Pressable style={[s.kbtn, s.kwide]} onPress={paste}>
+                  <Text style={s.klabel}>📋 Paste</Text>
+                </Pressable>
+              )}
               <Pressable style={[s.kbtn, s.kwide]} onPress={copyOut}>
                 <Text style={s.klabel}>{copied ? '✓ Copied' : '📄 Copy'}</Text>
               </Pressable>
@@ -530,7 +550,8 @@ export default function Workspace() {
                 </Pressable>
               )}
               <View style={s.sep} />
-              {KEYS.map((k) => (
+              {(lean ? KEYS.filter((k) => k.key === 'esc' || k.key === 'enter') : KEYS)
+                .map((k) => (
                 <Pressable key={k.key} style={[s.kbtn, k.wide && s.kwide]}
                   onPress={() => sendKey(k.key)}>
                   <Text style={s.klabel}>{k.label}</Text>
@@ -610,7 +631,8 @@ export default function Workspace() {
             <Text style={s.dictTitle}>🎤 Dictate to terminal</Text>
             <Text style={s.dictHint}>
               Tap the keyboard mic and speak — transcription stays clean here.
-              Send drops it on the prompt without running it.
+              Send ⏎ submits it; Place only drops it on the prompt to review
+              (hit ⏎ yourself).
             </Text>
             <TextInput
               style={s.dictInput}
@@ -619,15 +641,22 @@ export default function Workspace() {
               value={dictText} onChangeText={setDictText}
             />
             <View style={s.dictBtns}>
-              <Pressable style={[s.kbtn, s.kwide]} onPress={() => setDictating(false)}>
+              <Pressable style={s.kbtn} onPress={() => setDictating(false)}>
                 <Text style={{ color: C.muted }}>Cancel</Text>
               </Pressable>
-              <Pressable style={[s.kbtn, s.kwide, { backgroundColor: C.accent }]}
+              <Pressable style={[s.kbtn, s.kwide]}
                 onPress={() => {
                   if (dictText.trim()) sendPaste(dictText);
                   setDictating(false);
                 }}>
-                <Text style={{ color: C.bg, fontWeight: '600' }}>Send to terminal</Text>
+                <Text style={s.klabel}>Place only</Text>
+              </Pressable>
+              <Pressable style={[s.kbtn, s.kwide, { backgroundColor: C.accent }]}
+                onPress={() => {
+                  if (dictText.trim()) void sendSubmit(dictText);
+                  setDictating(false);
+                }}>
+                <Text style={{ color: C.bg, fontWeight: '600' }}>Send ⏎</Text>
               </Pressable>
             </View>
           </View>
