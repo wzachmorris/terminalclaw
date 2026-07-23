@@ -231,6 +231,15 @@ export default function Workspace() {
     const t = await Clipboard.getStringAsync();
     if (t) sendPaste(t);
   };
+  // 🕘 raw-screen scrollback modal
+  const openHist = async () => {
+    if (!box || !project) return;
+    setHistText('');
+    try {
+      const r = await termCapture(box, project.id);
+      setHistText(r.content.replace(/\s+$/, ''));
+    } catch { setHistText('(could not load history)'); }
+  };
   // paste + ⏎ — actually submits the message instead of leaving it on the
   // prompt for review; sequential so Enter can't outrun the paste
   const sendSubmit = async (t: string) => {
@@ -505,15 +514,47 @@ export default function Workspace() {
                 </Text>
               </View>
             )}
+            {lean ? (
+              /* phone chat: the input IS the bar — a messaging-app composer.
+                 iOS keyboard mic dictates straight into it; Send ⏎ submits.
+                 🖥 flips to terminal, 🕘 peeks at the raw screen, Esc
+                 interrupts Claude. More old-bar buttons return here only as
+                 they prove needed. */
+              <View style={s.chatBar}>
+                <Pressable style={s.cbtn} onPress={toggleChat}>
+                  <Text style={s.klabel}>🖥</Text>
+                </Pressable>
+                <Pressable style={s.cbtn} onPress={openHist}>
+                  <Text style={s.klabel}>🕘</Text>
+                </Pressable>
+                <TextInput
+                  style={s.chatInput}
+                  multiline
+                  placeholder="Message — tap 🎤 on the keyboard to dictate"
+                  placeholderTextColor={C.muted}
+                  value={dictText} onChangeText={setDictText}
+                />
+                <Pressable style={s.cbtn} onPress={() => sendKey('esc')}>
+                  <Text style={s.klabel}>Esc</Text>
+                </Pressable>
+                <Pressable
+                  style={[s.cbtn, s.cSend]}
+                  onPress={() => {
+                    const t = dictText;
+                    setDictText('');
+                    if (t.trim()) void sendSubmit(t);
+                  }}>
+                  <Text style={{ color: C.bg, fontWeight: '700' }}>⏎</Text>
+                </Pressable>
+              </View>
+            ) : (
             <ScrollView
               horizontal keyboardShouldPersistTaps="always"
               showsHorizontalScrollIndicator={false}
               style={s.bar} contentContainerStyle={s.barInner}
             >
               {/* the heavy-rotation buttons live first: dictate/copy are the
-                  phone workflow; the key row scrolls in behind them. Phone
-                  chat gets the lean bar — Dictate covers typing AND pasting
-                  (paste into its box), so the rest is clutter there */}
+                  phone workflow; the key row scrolls in behind them */}
               <Pressable style={[s.kbtn, s.kwide]}
                 onPress={() => { setDictText(''); setDictating(true); }}>
                 <Text style={s.klabel}>🎤 Dictate</Text>
@@ -526,17 +567,9 @@ export default function Workspace() {
               <Pressable style={[s.kbtn, s.kwide]} onPress={copyOut}>
                 <Text style={s.klabel}>{copied ? '✓ Copied' : '📄 Copy'}</Text>
               </Pressable>
-              {/* 🕘 raw-screen scrollback — stays available in chat mode too:
-                  it's the only way to see TUI-only things (permission
-                  prompts, menus) without switching views */}
-              <Pressable style={s.kbtn} onPress={async () => {
-                if (!box || !project) return;
-                setHistText('');
-                try {
-                  const r = await termCapture(box, project.id);
-                  setHistText(r.content.replace(/\s+$/, ''));
-                } catch { setHistText('(could not load history)'); }
-              }}>
+              {/* 🕘 raw-screen scrollback — the way to see TUI-only things
+                  (permission prompts, menus) without switching views */}
+              <Pressable style={s.kbtn} onPress={openHist}>
                 <Text style={s.klabel}>🕘</Text>
               </Pressable>
               {/* 📜 tmux mouse mode only matters where real wheel events exist
@@ -582,6 +615,7 @@ export default function Workspace() {
                 </Text>
               </Pressable>
             </ScrollView>
+            )}
           </View>
         </View>
       </KeyboardAvoidingView>
@@ -629,11 +663,6 @@ export default function Workspace() {
         >
           <View style={s.dictBox}>
             <Text style={s.dictTitle}>🎤 Dictate to terminal</Text>
-            <Text style={s.dictHint}>
-              Tap the keyboard mic and speak — transcription stays clean here.
-              Send ⏎ submits it; Place only drops it on the prompt to review
-              (hit ⏎ yourself).
-            </Text>
             <TextInput
               style={s.dictInput}
               multiline autoFocus
@@ -724,6 +753,21 @@ const s = StyleSheet.create({
   chatMsg: { marginVertical: 3 },
   chatUser: { marginTop: 10 },
   chatDim: { color: C.muted, fontSize: 11 },
+  chatBar: {
+    flexDirection: 'row', alignItems: 'flex-end', gap: 6,
+    padding: 6, backgroundColor: C.panel,
+    borderTopWidth: 1, borderTopColor: C.border,
+  },
+  chatInput: {
+    flex: 1, color: C.text, fontSize: 15, maxHeight: 120,
+    backgroundColor: C.bg, borderRadius: 10, borderWidth: 1,
+    borderColor: C.border, paddingHorizontal: 12, paddingVertical: 8,
+  },
+  cbtn: {
+    paddingHorizontal: 12, paddingVertical: 10, borderRadius: 10,
+    borderWidth: 1, borderColor: C.border,
+  },
+  cSend: { backgroundColor: C.accent, borderColor: C.accent },
   center: { alignItems: 'center', justifyContent: 'center' },
   bar: {
     flexGrow: 0, backgroundColor: C.panel,
@@ -744,7 +788,6 @@ const s = StyleSheet.create({
     borderWidth: 1, borderColor: C.border, gap: 10,
   },
   dictTitle: { color: C.text, fontSize: 16, fontWeight: '600' },
-  dictHint: { color: C.muted, fontSize: 12.5, lineHeight: 18 },
   dictInput: {
     minHeight: 120, maxHeight: 260, textAlignVertical: 'top',
     backgroundColor: C.bg, borderColor: C.border, borderWidth: 1,
