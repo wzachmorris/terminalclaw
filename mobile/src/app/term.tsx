@@ -36,6 +36,34 @@ const SEQ: Record<string, string> = {
   'ctrl-c': '\u0003',
 };
 
+// 📖 reader: strip Claude Code's input-box chrome from a capture's tail —
+// spinner, the two ──── rules around the ❯ prompt (ghost suggestion included),
+// and the ⏵⏵ hint line. Cut only when the whole box structure is present, so
+// plain-shell tabs and real content are never clipped. Then collapse 3+ blank
+// lines (TUI repaint gaps) so reading flows.
+function cleanCapture(raw: string): string {
+  let lines = raw.replace(/\s+$/, '').split('\n');
+  const isRule = (l: string) => /^\s*─{10,}\s*$/.test(l);
+  const chromeish = (l: string) => {
+    const t = l.trim();
+    return t === '' || isRule(l) || t.startsWith('❯') || t.startsWith('⏵')
+      || /^\? for shortcuts/.test(t) || /^[✻✳✶✽✢✣✤✥✦✧∗·*+]\s/.test(t);
+  };
+  let j = lines.length - 1, rules = 0;
+  while (j >= 0 && chromeish(lines[j]) && lines.length - j <= 15) {
+    if (isRule(lines[j])) rules++;
+    j--;
+  }
+  if (rules >= 2) lines = lines.slice(0, j + 1);
+  const out: string[] = [];
+  let blanks = 0;
+  for (const l of lines) {
+    if (l.trim() === '') { if (++blanks >= 3) continue; } else blanks = 0;
+    out.push(l);
+  }
+  return out.join('\n').replace(/\s+$/, '');
+}
+
 export default function Workspace() {
   const params = useLocalSearchParams<{ box?: string; project?: string }>();
   const [boxes, setBoxes] = useState<Box[]>([]);
@@ -174,7 +202,9 @@ export default function Workspace() {
       try {
         const r = await termCapture(b, pid);
         if (!live) return;
-        setReaderText(r.content.replace(/\s+$/, ''));
+        // freeze the text while scrolled up — content shifting mid-read (or
+        // mid-selection) is worse than being 2s stale; re-pin to resume live
+        if (readerPinned.current) setReaderText(cleanCapture(r.content));
         setStatus('up');
       } catch { if (live) setStatus('down'); }
     };
@@ -402,9 +432,16 @@ export default function Workspace() {
                   if (readerPinned.current) readerScroll.current?.scrollToEnd({ animated: false });
                 }}
               >
-                <Text selectable style={s.histText}>
-                  {readerText || 'Loading…'}
-                </Text>
+                {/* read-only TextInput, not Text: it's the only RN element
+                    that gets real iOS drag-handle range selection */}
+                <TextInput
+                  style={[s.histText, s.readerInput]}
+                  value={readerText || 'Loading…'}
+                  editable={false}
+                  multiline
+                  scrollEnabled={false}
+                  caretHidden
+                />
               </ScrollView>
             ) : box && project && nativeOn && TCTerminalView ? (
               <TCTerminalView
@@ -653,6 +690,7 @@ const s = StyleSheet.create({
   web: { flex: 1, backgroundColor: '#000' },
   reader: { flex: 1, backgroundColor: '#000' },
   readerInner: { padding: 10, paddingBottom: 20 },
+  readerInput: { padding: 0, margin: 0, textAlignVertical: 'top' },
   center: { alignItems: 'center', justifyContent: 'center' },
   bar: {
     flexGrow: 0, backgroundColor: C.panel,
