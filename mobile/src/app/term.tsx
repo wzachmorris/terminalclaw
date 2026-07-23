@@ -36,25 +36,38 @@ const SEQ: Record<string, string> = {
   'ctrl-c': '\u0003',
 };
 
-// 📖 reader: strip Claude Code's input-box chrome from a capture's tail —
-// spinner, the two ──── rules around the ❯ prompt (ghost suggestion included),
-// and the ⏵⏵ hint line. Cut only when the whole box structure is present, so
-// plain-shell tabs and real content are never clipped. Then collapse 3+ blank
-// lines (TUI repaint gaps) so reading flows.
+// 📖 reader: strip Claude Code's prompt box from a capture's tail. Strict
+// structural parse anchored at the very end — trailing hints/blanks, the
+// bottom ── rule, the ❯ box (typed text included, ≤8 lines), the top rule,
+// optionally one spinner line above. Transcript lines ALSO start with ❯
+// (user messages), so nothing is matched loosely: no full box at the very
+// bottom → no cut at all. Then collapse 3+ blank lines (repaint gaps).
 function cleanCapture(raw: string): string {
   let lines = raw.replace(/\s+$/, '').split('\n');
   const isRule = (l: string) => /^\s*─{10,}\s*$/.test(l);
-  const chromeish = (l: string) => {
+  const isBlank = (l: string) => l.trim() === '';
+  const isHint = (l: string) => {
     const t = l.trim();
-    return t === '' || isRule(l) || t.startsWith('❯') || t.startsWith('⏵')
-      || /^\? for shortcuts/.test(t) || /^[✻✳✶✽✢✣✤✥✦✧∗·*+]\s/.test(t);
+    return t.startsWith('⏵') || t.startsWith('? for shortcuts')
+      || /esc to interrupt|shift\+tab to cycle/.test(t);
   };
-  let j = lines.length - 1, rules = 0;
-  while (j >= 0 && chromeish(lines[j]) && lines.length - j <= 15) {
-    if (isRule(lines[j])) rules++;
-    j--;
+  let i = lines.length - 1;
+  while (i >= 0 && (isBlank(lines[i]) || isHint(lines[i]))) i--;
+  if (i >= 0 && isRule(lines[i])) {
+    let top = -1, sawPrompt = false;
+    for (let k = i - 1; k >= 0 && i - k <= 8; k--) {
+      if (isRule(lines[k])) { top = k; break; }
+      if (lines[k].trimStart().startsWith('❯')) sawPrompt = true;
+    }
+    if (top >= 0 && sawPrompt) {
+      let m = top - 1;
+      while (m >= 0 && isBlank(lines[m])) m--;
+      // one status/spinner line may sit right above the box: "✢ Puttering…
+      // (2m 9s · …)" / "✻ Sautéed for 12s" — symbol + one word + …/timing
+      if (m >= 0 && /^[^\w\s]\s+\S+(…|\s+for\s+\d)/u.test(lines[m].trim())) m--;
+      lines = lines.slice(0, m + 1);
+    }
   }
-  if (rules >= 2) lines = lines.slice(0, j + 1);
   const out: string[] = [];
   let blanks = 0;
   for (const l of lines) {
