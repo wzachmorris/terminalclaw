@@ -769,6 +769,108 @@ def term_capture(project, lines):
     return out.stdout
 
 
+def _transcript_msgs(e):
+    """Flatten one Claude Code transcript entry into displayable messages.
+    Skips sidechains (subagent traffic), meta entries, thinking blocks, and
+    harness-injected wrappers; tool calls/results collapse to one-liners."""
+    if e.get("type") not in ("user", "assistant") or e.get("isSidechain") or e.get("isMeta"):
+        return []
+    m = e.get("message") or {}
+    ts = e.get("timestamp", "")
+    out = []
+    c = m.get("content")
+    if isinstance(c, str):
+        t = c.strip()
+        if t and not t.startswith("<"):
+            out.append({"role": "user", "text": t, "ts": ts})
+        return out
+    if not isinstance(c, list):
+        return out
+    role = m.get("role") or e["type"]
+    for b in c:
+        bt = b.get("type") if isinstance(b, dict) else None
+        if bt == "text":
+            t = (b.get("text") or "").strip()
+            if t and not (role == "user" and t.startswith("<")):
+                out.append({"role": role, "text": t, "ts": ts})
+        elif bt == "tool_use":
+            inp = b.get("input") or {}
+            hint = (inp.get("description") or inp.get("command")
+                    or inp.get("file_path") or inp.get("prompt") or "")
+            hint = " ".join(str(hint).split())[:120]
+            out.append({"role": "tool",
+                        "text": "%s(%s)" % (b.get("name", "tool"), hint), "ts": ts})
+        elif bt == "tool_result":
+            t = b.get("content")
+            if isinstance(t, list):
+                t = " ".join(x.get("text", "") for x in t if isinstance(x, dict))
+            t = " ".join(str(t or "").split())[:300]
+            if t:
+                out.append({"role": "result", "text": t, "ts": ts})
+    return out
+
+
+def claude_transcript(project, since):
+    """Live view of a project's Claude conversation, read from the transcript
+    Claude Code already writes (~/.claude/projects/<slug>/<session>.jsonl) —
+    actual conversation data, no tmux screen-scraping, no API usage.
+
+    `since` is "<session>:<byte-offset>" from a prior call; only new complete
+    lines are read and parsed. A different newest session (new/cleared chat)
+    sets reset=True and starts over. First call returns the last 200 messages.
+    """
+    reg = load_registry()
+    proj = _find_project(reg, (project or "").strip())
+    if not proj:
+        raise ValueError("unknown project")
+    if proj.get("command"):
+        # command tabs (ssh boxes etc.) don't run claude here — their dir
+        # would misleadingly match another project's transcript
+        return {"session": None, "offset": 0, "reset": False, "messages": []}
+    slug = re.sub(r"[^A-Za-z0-9]", "-", os.path.normpath(proj.get("dir") or ""))
+    pdir = os.path.join(CLAUDE_PROJECTS, slug)
+    try:
+        files = [os.path.join(pdir, f) for f in os.listdir(pdir)
+                 if f.endswith(".jsonl")]
+    except OSError:
+        files = []
+    if not files:
+        return {"session": None, "offset": 0, "reset": False, "messages": []}
+    newest = max(files, key=os.path.getmtime)
+    sid = os.path.basename(newest)[:-len(".jsonl")]
+    size = os.path.getsize(newest)
+    start, reset = 0, False
+    if since:
+        s_sid, _, s_off = since.partition(":")
+        try:
+            s_off = int(s_off)
+        except ValueError:
+            s_off = -1
+        if s_sid == sid and 0 <= s_off <= size:
+            start = s_off
+        else:
+            reset = True
+    with open(newest, "rb") as fh:
+        fh.seek(start)
+        chunk = fh.read()
+    # only consume complete lines — a write may be mid-flight
+    nl = chunk.rfind(b"\n")
+    if nl < 0:
+        chunk, end = b"", start
+    else:
+        end = start + nl + 1
+        chunk = chunk[:nl]
+    msgs = []
+    for line in chunk.splitlines():
+        try:
+            msgs += _transcript_msgs(json.loads(line))
+        except (ValueError, AttributeError):
+            continue
+    if start == 0:
+        msgs = msgs[-200:]
+    return {"session": sid, "offset": end, "reset": reset, "messages": msgs}
+
+
 def term_buffer():
     """Most recent tmux paste buffer — what a mouse-mode drag just copied
     ('N characters copied to the tmux buffer'). Buffers are global to the
@@ -1284,6 +1386,20 @@ class Handler(BaseHTTPRequestHandler):
             except Exception as e:
                 return self._send(500, {"error": str(e)})
             return self._send(200, {"content": text})
+
+        if path == "/api/claude/transcript":
+            # The project's Claude conversation from its transcript file —
+            # backs the app's 💬 chat view. Incremental via ?since=.
+            if not self._authed():
+                return self._send(401, {"error": "unauthorized"})
+            try:
+                data = claude_transcript(q.get("project", [""])[0],
+                                         q.get("since", [""])[0])
+            except ValueError as e:
+                return self._send(400, {"error": str(e)})
+            except Exception as e:
+                return self._send(500, {"error": str(e)})
+            return self._send(200, data)
 
         if path == "/api/doc":
             # Read a project's doc tab by index. Path comes from the registry,

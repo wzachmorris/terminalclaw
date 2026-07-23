@@ -3,10 +3,10 @@
 // sidebar on wide screens, a chip strip on phones), terminal filling the
 // rest. Layout mirrors the web dashboard's always-visible sidebar instead of
 // v1's list → list → terminal drill-down.
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
-  Alert, KeyboardAvoidingView, Modal, Platform, Pressable, ScrollView,
-  StyleSheet, Text, TextInput, useWindowDimensions, View,
+  Alert, FlatList, KeyboardAvoidingView, Modal, Platform, Pressable,
+  ScrollView, StyleSheet, Text, TextInput, useWindowDimensions, View,
 } from 'react-native';
 import { router, Stack, useFocusEffect, useLocalSearchParams } from 'expo-router';
 import { SafeAreaView } from 'react-native-safe-area-context';
@@ -14,8 +14,9 @@ import { WebView } from 'react-native-webview';
 import * as Clipboard from 'expo-clipboard';
 import * as SecureStore from 'expo-secure-store';
 import {
-  deleteProject, getProjects, Project, setProjectHidden, termBuffer,
-  termCapture, termKey, termMouse, termPaste, termUrl,
+  ApiError, ChatMsg as ChatMsgT, claudeTranscript, deleteProject, getProjects,
+  Project, setProjectHidden, termBuffer, termCapture, termKey, termMouse,
+  termPaste, termUrl,
 } from '@/lib/api';
 import { Box, loadBoxes, tokenAlive } from '@/lib/boxes';
 import { C } from '@/lib/theme';
@@ -35,47 +36,6 @@ const SEQ: Record<string, string> = {
   esc: '\u001b', tab: '\t', btab: '\u001b[Z', enter: '\r',
   'ctrl-c': '\u0003',
 };
-
-// 📖 reader: strip Claude Code's prompt box from a capture's tail. Strict
-// structural parse anchored at the very end — trailing hints/blanks, the
-// bottom ── rule, the ❯ box (typed text included, ≤8 lines), the top rule,
-// optionally one spinner line above. Transcript lines ALSO start with ❯
-// (user messages), so nothing is matched loosely: no full box at the very
-// bottom → no cut at all. Then collapse 3+ blank lines (repaint gaps).
-function cleanCapture(raw: string): string {
-  let lines = raw.replace(/\s+$/, '').split('\n');
-  const isRule = (l: string) => /^\s*─{10,}\s*$/.test(l);
-  const isBlank = (l: string) => l.trim() === '';
-  const isHint = (l: string) => {
-    const t = l.trim();
-    return t.startsWith('⏵') || t.startsWith('? for shortcuts')
-      || /esc to interrupt|shift\+tab to cycle/.test(t);
-  };
-  let i = lines.length - 1;
-  while (i >= 0 && (isBlank(lines[i]) || isHint(lines[i]))) i--;
-  if (i >= 0 && isRule(lines[i])) {
-    let top = -1, sawPrompt = false;
-    for (let k = i - 1; k >= 0 && i - k <= 8; k--) {
-      if (isRule(lines[k])) { top = k; break; }
-      if (lines[k].trimStart().startsWith('❯')) sawPrompt = true;
-    }
-    if (top >= 0 && sawPrompt) {
-      let m = top - 1;
-      while (m >= 0 && isBlank(lines[m])) m--;
-      // one status/spinner line may sit right above the box: "✢ Puttering…
-      // (2m 9s · …)" / "✻ Sautéed for 12s" — symbol + one word + …/timing
-      if (m >= 0 && /^[^\w\s]\s+\S+(…|\s+for\s+\d)/u.test(lines[m].trim())) m--;
-      lines = lines.slice(0, m + 1);
-    }
-  }
-  const out: string[] = [];
-  let blanks = 0;
-  for (const l of lines) {
-    if (l.trim() === '') { if (++blanks >= 3) continue; } else blanks = 0;
-    out.push(l);
-  }
-  return out.join('\n').replace(/\s+$/, '');
-}
 
 export default function Workspace() {
   const params = useLocalSearchParams<{ box?: string; project?: string }>();
@@ -185,46 +145,61 @@ export default function Workspace() {
     if (!next) TCTerminal?.disconnectAll();
     setStatus('connecting');
   };
-  // 📖 reader mode — the session as plain text in a native scroll view,
-  // polled from the server (capture-pane); input goes through the server's
-  // send-keys/paste endpoints. No terminal engine involved, so selection,
-  // copy, and momentum scrolling behave like any normal app. Phones default
-  // to reader (reading + dictation IS the phone workflow); wide screens
-  // default to the live terminal.
-  const [readerPref, setReaderPref] = useState<string | null>(null);
+  // 💬 chat view — the session's Claude conversation read from the transcript
+  // file Claude Code already writes on the server: real message objects, not
+  // screen-scraping. Incremental polling (only new bytes), a virtualized list
+  // (no iOS long-text ceiling), native scrolling/selection, long-press any
+  // message to copy it whole. Input still rides the server's send-keys/paste
+  // endpoints. Phones default to chat; wide screens to the live terminal.
+  // Tabs with no transcript (ssh boxes, plain shells) fall back to terminal.
+  const [chatPref, setChatPref] = useState<string | null>(null);
   useEffect(() => {
-    void SecureStore.getItemAsync('tc.reader').then(setReaderPref);
+    void SecureStore.getItemAsync('tc.reader').then(setChatPref);
   }, []);
-  const readerOn = readerPref === '1' || (readerPref !== '0' && !wide);
-  const toggleReader = () => {
-    const next = readerOn ? '0' : '1';
-    setReaderPref(next);
+  const chatOn = chatPref === '1' || (chatPref !== '0' && !wide);
+  const toggleChat = () => {
+    const next = chatOn ? '0' : '1';
+    setChatPref(next);
     void SecureStore.setItemAsync('tc.reader', next);
     setStatus('connecting');
   };
-  const [readerText, setReaderText] = useState('');
-  const readerScroll = useRef<ScrollView | null>(null);
-  const readerPinned = useRef(true);   // stick to the bottom unless scrolled up
+  const [chatMsgs, setChatMsgs] = useState<ChatMsgT[]>([]);
+  const [chatAvail, setChatAvail] = useState<boolean | null>(null);
+  const chatSince = useRef('');
+  const chatActive = chatOn && chatAvail !== false;
   useEffect(() => {
-    if (!readerOn || !box || !project) return;
+    if (!chatOn || !box || !project) return;
     const b = box, pid = project.id;
-    setReaderText('');
-    readerPinned.current = true;
+    setChatMsgs([]);
+    setChatAvail(null);
+    chatSince.current = '';
     let live = true;
     const pull = async () => {
       try {
-        const r = await termCapture(b, pid);
+        const r = await claudeTranscript(b, pid, chatSince.current);
         if (!live) return;
-        // freeze the text while scrolled up — content shifting mid-read (or
-        // mid-selection) is worse than being 2s stale; re-pin to resume live
-        if (readerPinned.current) setReaderText(cleanCapture(r.content));
+        if (r.session === null) { setChatAvail(false); return; }
+        setChatAvail(true);
+        const first = chatSince.current === '';
+        chatSince.current = `${r.session}:${r.offset}`;
+        if (r.messages.length || r.reset) {
+          setChatMsgs((cur) => (first || r.reset)
+            ? r.messages : [...cur, ...r.messages]);
+        }
         setStatus('up');
-      } catch { if (live) setStatus('down'); }
+      } catch (e) {
+        if (!live) return;
+        // 404 = older server without the endpoint — use the terminal there
+        if (e instanceof ApiError && e.status === 404) setChatAvail(false);
+        else setStatus('down');
+      }
     };
     void pull();
     const t = setInterval(() => void pull(), 2000);
     return () => { live = false; clearInterval(t); };
-  }, [readerOn, box?.id, box?.token, project?.id]);
+  }, [chatOn, box?.id, box?.token, project?.id]);
+  // inverted list wants newest-first
+  const chatData = useMemo(() => [...chatMsgs].reverse(), [chatMsgs]);
 
   const sessionKey = box && project
     ? `${box.id}:${project.id}:${box.token.slice(-8)}` : '';
@@ -237,15 +212,15 @@ export default function Workspace() {
     web.current?.injectJavaScript(`window.TC && (${code}); true;`);
   }, []);
 
-  // one input path for the terminals and the reader. Reader input rides the
+  // one input path for the terminals and the chat view. Chat input rides the
   // server's send-keys/paste endpoints — no live terminal connection needed.
   const sendKey = (k: string) => {
-    if (readerOn) { if (box && project) void termKey(box, project.id, k).catch(() => {}); }
+    if (chatActive) { if (box && project) void termKey(box, project.id, k).catch(() => {}); }
     else if (nativeOn && sessionKey) TCTerminal!.send(sessionKey, SEQ[k] ?? k);
     else js(`TC.key(${JSON.stringify(k)})`);
   };
   const sendPaste = (t: string) => {
-    if (readerOn) { if (box && project) void termPaste(box, project.id, t).catch(() => {}); }
+    if (chatActive) { if (box && project) void termPaste(box, project.id, t).catch(() => {}); }
     else if (nativeOn && sessionKey) TCTerminal!.send(sessionKey, `\u001b[200~${t}\u001b[201~`);
     else js(`TC.paste(${JSON.stringify(t)})`);
   };
@@ -274,7 +249,10 @@ export default function Workspace() {
   const copyOut = async () => {
     if (!box) return;
     let text = '';
-    if (readerOn) text = readerText;   // reader: Copy = copy everything shown
+    if (chatActive) {
+      // chat: Copy = Claude's latest response (long-press a bubble for others)
+      text = [...chatMsgs].reverse().find((m) => m.role === 'assistant')?.text ?? '';
+    }
     if (nativeOn && sessionKey) {
       try { text = await TCTerminal!.getSelection(sessionKey); } catch { /* fall through */ }
     }
@@ -428,34 +406,46 @@ export default function Workspace() {
                 {showHidden && hidden.map((p) => projectRow(p, true))}
               </ScrollView>
             )}
-            {box && project && readerOn ? (
-              /* 📖 reader — plain text, native scrolling/selection; sticks to
-                 the bottom while new output streams unless you scroll up */
-              <ScrollView
-                ref={readerScroll}
+            {box && project && chatActive ? (
+              /* 💬 chat — inverted virtualized list: opens at the newest
+                 message and stays pinned there while output streams; scroll
+                 up freely (position holds), long-press a message to copy it */
+              <FlatList
                 style={s.reader}
-                contentContainerStyle={s.readerInner}
-                scrollEventThrottle={100}
-                onScroll={(e) => {
-                  const { contentOffset, layoutMeasurement, contentSize } = e.nativeEvent;
-                  readerPinned.current =
-                    contentOffset.y + layoutMeasurement.height >= contentSize.height - 60;
-                }}
-                onContentSizeChange={() => {
-                  if (readerPinned.current) readerScroll.current?.scrollToEnd({ animated: false });
-                }}
-              >
-                {/* read-only TextInput, not Text: it's the only RN element
-                    that gets real iOS drag-handle range selection */}
-                <TextInput
-                  style={[s.histText, s.readerInput]}
-                  value={readerText || 'Loading…'}
-                  editable={false}
-                  multiline
-                  scrollEnabled={false}
-                  caretHidden
-                />
-              </ScrollView>
+                contentContainerStyle={s.chatInner}
+                inverted
+                data={chatData}
+                keyExtractor={(_m, i) => String(chatMsgs.length - i)}
+                ListEmptyComponent={
+                  <Text style={[s.histText, { color: C.muted, transform: [{ scaleY: -1 }] }]}>
+                    {chatAvail === null ? 'Loading conversation…' : 'No messages yet.'}
+                  </Text>
+                }
+                renderItem={({ item }) => (
+                  <Pressable
+                    style={[s.chatMsg, item.role === 'user' && s.chatUser]}
+                    onLongPress={() => {
+                      void Clipboard.setStringAsync(item.text);
+                      setCopied(true);
+                      setTimeout(() => setCopied(false), 1500);
+                    }}
+                  >
+                    <Text
+                      selectable
+                      style={[
+                        s.histText,
+                        item.role === 'user' && { color: C.accent },
+                        (item.role === 'tool' || item.role === 'result') && s.chatDim,
+                      ]}
+                    >
+                      {item.role === 'user' ? `❯ ${item.text}`
+                        : item.role === 'tool' ? `● ${item.text}`
+                        : item.role === 'result' ? `  ⎿ ${item.text}`
+                        : item.text}
+                    </Text>
+                  </Pressable>
+                )}
+              />
             ) : box && project && nativeOn && TCTerminalView ? (
               <TCTerminalView
                 key={sessionKey}
@@ -516,24 +506,23 @@ export default function Workspace() {
               <Pressable style={[s.kbtn, s.kwide]} onPress={copyOut}>
                 <Text style={s.klabel}>{copied ? '✓ Copied' : '📄 Copy'}</Text>
               </Pressable>
-              {/* 🕘 scrollback modal — redundant while the reader (which IS
-                  the scrollback) is the front view */}
-              {!readerOn && (
-                <Pressable style={s.kbtn} onPress={async () => {
-                  if (!box || !project) return;
-                  setHistText('');
-                  try {
-                    const r = await termCapture(box, project.id);
-                    setHistText(r.content.replace(/\s+$/, ''));
-                  } catch { setHistText('(could not load history)'); }
-                }}>
-                  <Text style={s.klabel}>🕘</Text>
-                </Pressable>
-              )}
+              {/* 🕘 raw-screen scrollback — stays available in chat mode too:
+                  it's the only way to see TUI-only things (permission
+                  prompts, menus) without switching views */}
+              <Pressable style={s.kbtn} onPress={async () => {
+                if (!box || !project) return;
+                setHistText('');
+                try {
+                  const r = await termCapture(box, project.id);
+                  setHistText(r.content.replace(/\s+$/, ''));
+                } catch { setHistText('(could not load history)'); }
+              }}>
+                <Text style={s.klabel}>🕘</Text>
+              </Pressable>
               {/* 📜 tmux mouse mode only matters where real wheel events exist
                   (trackpad/mouse). On phones a swipe becomes a tmux drag, not a
                   scroll — the toggle is invisible there, so don't show it. */}
-              {wide && !readerOn && (
+              {wide && !chatActive && (
                 <Pressable
                   style={[s.kbtn, mouseOn && { borderColor: C.accent }]}
                   onPress={toggleMouse}>
@@ -549,26 +538,26 @@ export default function Workspace() {
               ))}
               {/* dismisses the phone's on-screen keyboard — pointless with a
                   hardware keyboard, so wide screens don't get it */}
-              {!wide && !nativeOn && !readerOn && (
+              {!wide && !nativeOn && !chatActive && (
                 <Pressable style={[s.kbtn, s.kwide]} onPress={() => js('TC.blurKeyboard()')}>
                   <Text style={s.klabel}>⌨ Hide</Text>
                 </Pressable>
               )}
               {/* ⚡ v2 native terminal (SwiftTerm) — only offered when this
                   binary contains the module; WebView remains the fallback */}
-              {!!TCTerminalView && !readerOn && (
+              {!!TCTerminalView && !chatActive && (
                 <Pressable
                   style={[s.kbtn, s.kwide, nativeOn && { borderColor: C.accent }]}
                   onPress={toggleNative}>
                   <Text style={[s.klabel, nativeOn && { color: C.accent }]}>⚡</Text>
                 </Pressable>
               )}
-              {/* 📖 reader ↔ 🖥 live terminal */}
+              {/* 💬 chat ↔ 🖥 live terminal */}
               <Pressable
-                style={[s.kbtn, s.kwide, readerOn && { borderColor: C.accent }]}
-                onPress={toggleReader}>
-                <Text style={[s.klabel, readerOn && { color: C.accent }]}>
-                  {readerOn ? '🖥 Term' : '📖 Read'}
+                style={[s.kbtn, s.kwide, chatOn && { borderColor: C.accent }]}
+                onPress={toggleChat}>
+                <Text style={[s.klabel, chatOn && { color: C.accent }]}>
+                  {chatOn ? '🖥 Term' : '💬 Chat'}
                 </Text>
               </Pressable>
             </ScrollView>
@@ -702,8 +691,10 @@ const s = StyleSheet.create({
   pstripInner: { padding: 5, gap: 5, alignItems: 'center' },
   web: { flex: 1, backgroundColor: '#000' },
   reader: { flex: 1, backgroundColor: '#000' },
-  readerInner: { padding: 10, paddingBottom: 20 },
-  readerInput: { padding: 0, margin: 0, textAlignVertical: 'top' },
+  chatInner: { padding: 10 },
+  chatMsg: { marginVertical: 3 },
+  chatUser: { marginTop: 10 },
+  chatDim: { color: C.muted, fontSize: 11 },
   center: { alignItems: 'center', justifyContent: 'center' },
   bar: {
     flexGrow: 0, backgroundColor: C.panel,

@@ -105,6 +105,18 @@ export async function termKey(box: Box, project: string, key: string) {
   });
 }
 
+// 💬 chat view: the project's Claude conversation from the transcript file
+// Claude Code already writes — real message objects, no tmux screen-scraping.
+// `since` = "<session>:<offset>" from the previous call for incremental reads.
+export type ChatMsg = { role: string; text: string; ts: string };
+export async function claudeTranscript(box: Box, project: string, since: string):
+    Promise<{ session: string | null; offset: number; reset: boolean; messages: ChatMsg[] }> {
+  return req(`${box.url}/api/claude/transcript?project=${encodeURIComponent(project)}` +
+    `&since=${encodeURIComponent(since)}`, {
+    headers: { 'X-TC-Token': box.token },
+  });
+}
+
 export async function termPaste(box: Box, project: string, text: string) {
   return req(`${box.url}/api/term/paste`, {
     method: 'POST',
