@@ -755,16 +755,16 @@ const s = StyleSheet.create({
   chatDim: { color: C.muted, fontSize: 11 },
   chatBar: {
     flexDirection: 'row', alignItems: 'flex-end', gap: 6,
-    padding: 6, backgroundColor: C.panel,
+    padding: 8, backgroundColor: C.panel,
     borderTopWidth: 1, borderTopColor: C.border,
   },
   chatInput: {
     flex: 1, color: C.text, fontSize: 15, maxHeight: 120,
     backgroundColor: C.bg, borderRadius: 10, borderWidth: 1,
-    borderColor: C.border, paddingHorizontal: 12, paddingVertical: 8,
+    borderColor: C.border, paddingHorizontal: 12, paddingVertical: 11,
   },
   cbtn: {
-    paddingHorizontal: 12, paddingVertical: 10, borderRadius: 10,
+    paddingHorizontal: 12, paddingVertical: 13, borderRadius: 10,
     borderWidth: 1, borderColor: C.border,
   },
   cSend: { backgroundColor: C.accent, borderColor: C.accent },
@@ -773,9 +773,9 @@ const s = StyleSheet.create({
     flexGrow: 0, backgroundColor: C.panel,
     borderTopWidth: 1, borderTopColor: C.border,
   },
-  barInner: { padding: 6, gap: 6, alignItems: 'center' },
+  barInner: { padding: 8, gap: 6, alignItems: 'center' },
   kbtn: {
-    minWidth: 44, height: 40, borderRadius: 8, paddingHorizontal: 10,
+    minWidth: 44, height: 50, borderRadius: 8, paddingHorizontal: 10,
     backgroundColor: C.panel2, borderWidth: 1, borderColor: C.border,
     alignItems: 'center', justifyContent: 'center',
   },
