@@ -19,6 +19,7 @@ Serves the dashboard SPA and a small JSON API:
   GET  /gate/login       -> login form
   POST /gate/login       -> verify password, set signed session cookie
   POST /api/login        -> verify password, return 30-day token (mobile app)
+  POST /api/upload       -> {name, data:b64} saved under /tmp/tc-uploads, returns path
   GET  /gate/check       -> 200 if cookie valid else 302 (Caddy forward_auth target)
   GET  /gate/logout      -> clear cookie
 
@@ -1043,6 +1044,34 @@ class Handler(BaseHTTPRequestHandler):
             except Exception as e:
                 return self._send(500, {"error": str(e)})
             return self._send(200, {"ok": True, "mouse": state})
+
+        if u.path == "/api/upload":
+            # Save a small file (mobile screenshot) to a world-readable temp
+            # dir and return its path — the app pastes the path into the
+            # prompt so Claude can read the image. Body is {name, data:b64};
+            # read directly (not _read_json) for a bigger cap than 1 MB.
+            if not self._authed():
+                return self._send(401, {"error": "unauthorized"})
+            length = int(self.headers.get("Content-Length", "0") or 0)
+            if length <= 0 or length > 30_000_000:
+                return self._send(400, {"error": "too large (30 MB cap)"})
+            try:
+                data = json.loads(self.rfile.read(length).decode("utf-8", "replace"))
+                raw = base64.b64decode(data.get("data", ""), validate=True)
+            except Exception:
+                return self._send(400, {"error": "bad request"})
+            if not raw:
+                return self._send(400, {"error": "empty file"})
+            name = re.sub(r"[^A-Za-z0-9._-]", "_",
+                          os.path.basename(str(data.get("name") or "upload.png")))
+            updir = "/tmp/tc-uploads"
+            os.makedirs(updir, exist_ok=True)
+            os.chmod(updir, 0o755)   # dashboard may run as root; claude must read
+            path = os.path.join(updir, f"{time.strftime('%Y%m%d-%H%M%S')}-{name}")
+            with open(path, "wb") as f:
+                f.write(raw)
+            os.chmod(path, 0o644)
+            return self._send(200, {"ok": True, "path": path})
 
         if u.path == "/api/project":
             # Create a new project tab (name + directory). Auth-gated + validated.

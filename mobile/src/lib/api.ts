@@ -117,6 +117,18 @@ export async function claudeTranscript(box: Box, project: string, since: string)
   });
 }
 
+// 📎 attach: ship a screenshot/file to the box; server saves it under
+// /tmp/tc-uploads and returns the path, which goes into the prompt so
+// Claude can read the image itself.
+export async function uploadFile(box: Box, name: string, dataB64: string):
+    Promise<{ path: string }> {
+  return req(`${box.url}/api/upload`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', 'X-TC-Token': box.token },
+    body: JSON.stringify({ name, data: dataB64 }),
+  });
+}
+
 export async function termPaste(box: Box, project: string, text: string) {
   return req(`${box.url}/api/term/paste`, {
     method: 'POST',

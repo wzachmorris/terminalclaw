@@ -29,7 +29,13 @@
           "imageWidth": 96
         }
       ],
-      "expo-secure-store"
+      "expo-secure-store",
+      [
+        "expo-image-picker",
+        {
+          "photosPermission": "Attach screenshots from your library to send to Claude."
+        }
+      ]
     ],
     "experiments": {
       "typedRoutes": true

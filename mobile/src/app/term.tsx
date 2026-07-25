@@ -12,11 +12,14 @@ import { router, Stack, useFocusEffect, useLocalSearchParams } from 'expo-router
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { WebView } from 'react-native-webview';
 import * as Clipboard from 'expo-clipboard';
+import * as DocumentPicker from 'expo-document-picker';
+import * as FileSystem from 'expo-file-system/legacy';
+import * as ImagePicker from 'expo-image-picker';
 import * as SecureStore from 'expo-secure-store';
 import {
   ApiError, ChatMsg as ChatMsgT, claudeTranscript, deleteProject, getProjects,
   Project, setProjectHidden, termBuffer, termCapture, termKey, termMouse,
-  termPaste, termUrl,
+  termPaste, termUrl, uploadFile,
 } from '@/lib/api';
 import { Box, loadBoxes, tokenAlive } from '@/lib/boxes';
 import { C } from '@/lib/theme';
@@ -250,6 +253,46 @@ export default function Workspace() {
       setHistText(r.content.replace(/\s+$/, ''));
     } catch { setHistText('(could not load history)'); }
   };
+  // 📎 attach: pick a screenshot (Photos on the phone, a file panel on the
+  // Mac), upload it to the box, and drop the server-side path into the
+  // message — Claude opens the image from that path itself.
+  const [attaching, setAttaching] = useState(false);
+  const attachUpload = async (name: string, b64: string) => {
+    if (!box) return;
+    setAttaching(true);
+    try {
+      const r = await uploadFile(box, name, b64);
+      setDictText((t) => (t && !t.endsWith(' ') ? `${t} ` : t) + `${r.path} `);
+    } catch {
+      Alert.alert('Upload failed', 'Could not send the file to the box.');
+    } finally { setAttaching(false); }
+  };
+  const attach = () => {
+    Alert.alert('Attach', 'Uploads to the box and puts the file path in your message so Claude can open it.', [
+      {
+        text: 'Photo library',
+        onPress: () => void (async () => {
+          const res = await ImagePicker.launchImageLibraryAsync({
+            mediaTypes: ['images'], base64: true, quality: 0.9,
+          });
+          const a = res.assets?.[0];
+          if (a?.base64) await attachUpload(a.fileName ?? 'photo.jpg', a.base64);
+        })(),
+      },
+      {
+        text: 'Choose file',
+        onPress: () => void (async () => {
+          const res = await DocumentPicker.getDocumentAsync({ copyToCacheDirectory: true });
+          const a = res.assets?.[0];
+          if (!a) return;
+          const b64 = await FileSystem.readAsStringAsync(a.uri,
+            { encoding: FileSystem.EncodingType.Base64 });
+          await attachUpload(a.name ?? 'file', b64);
+        })(),
+      },
+      { text: 'Cancel', style: 'cancel' },
+    ]);
+  };
   // composer send: clear the box, then paste + ⏎ the text
   const swallowNewline = useRef(false);
   const composerSubmit = () => {
@@ -290,11 +333,18 @@ export default function Workspace() {
   // off); (3) the whole scrollback via capture-pane.
   const copyOut = async () => {
     if (!box) return;
-    let text = '';
     if (chatActive) {
-      // chat: Copy = Claude's latest response (long-press a bubble for others)
-      text = [...chatMsgs].reverse().find((m) => m.role === 'assistant')?.text ?? '';
+      // chat: Copy = Claude's latest response (long-press a bubble for
+      // others). Return here — falling through to the terminal paths let a
+      // stale native selection / tmux buffer overwrite the chat text.
+      const t = [...chatMsgs].reverse().find((m) => m.role === 'assistant')?.text ?? '';
+      if (!t) return;
+      await Clipboard.setStringAsync(t.replace(/\s+$/, ''));
+      setCopied(true);
+      setTimeout(() => setCopied(false), 1500);
+      return;
     }
+    let text = '';
     if (nativeOn && sessionKey) {
       try { text = await TCTerminal!.getSelection(sessionKey); } catch { /* fall through */ }
     }
@@ -558,6 +608,9 @@ export default function Workspace() {
                 )}
                 <Pressable style={s.cbtn} onPress={openHist}>
                   <Text style={s.klabel}>🕘</Text>
+                </Pressable>
+                <Pressable style={s.cbtn} onPress={attach} disabled={attaching}>
+                  <Text style={s.klabel}>{attaching ? '⏳' : '📎'}</Text>
                 </Pressable>
                 <TextInput
                   style={[s.chatInput,
