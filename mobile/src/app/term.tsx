@@ -5,7 +5,7 @@
 // v1's list → list → terminal drill-down.
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
-  Alert, FlatList, KeyboardAvoidingView, Modal, Platform, Pressable,
+  Alert, FlatList, Keyboard, KeyboardAvoidingView, Modal, Platform, Pressable,
   ScrollView, StyleSheet, Text, TextInput, useWindowDimensions, View,
 } from 'react-native';
 import { router, Stack, useFocusEffect, useLocalSearchParams } from 'expo-router';
@@ -48,6 +48,18 @@ export default function Workspace() {
   const [copied, setCopied] = useState(false);
   const [dictating, setDictating] = useState(false);
   const [dictText, setDictText] = useState('');
+  // composer height is pinned to measured content — iOS multiline inputs
+  // otherwise balloon to maxHeight on focus even when empty
+  const [composerH, setComposerH] = useState(0);
+  const [kbUp, setKbUp] = useState(false);
+  useEffect(() => {
+    const ios = Platform.OS === 'ios';
+    const show = Keyboard.addListener(
+      ios ? 'keyboardWillShow' : 'keyboardDidShow', () => setKbUp(true));
+    const hide = Keyboard.addListener(
+      ios ? 'keyboardWillHide' : 'keyboardDidHide', () => setKbUp(false));
+    return () => { show.remove(); hide.remove(); };
+  }, []);
   const [histText, setHistText] = useState<string | null>(null);   // 🕘 modal
   const web = useRef<WebView>(null);
   const lastSel = useRef('');
@@ -439,6 +451,11 @@ export default function Workspace() {
                 style={s.reader}
                 contentContainerStyle={s.chatInner}
                 inverted
+                /* new messages insert at offset 0 of the inverted list; hold
+                   the reader's place unless they're already at the newest end */
+                maintainVisibleContentPosition={{
+                  minIndexForVisible: 0, autoscrollToTopThreshold: 20,
+                }}
                 data={chatData}
                 keyExtractor={(_m, i) => String(chatMsgs.length - i)}
                 ListEmptyComponent={
@@ -521,16 +538,28 @@ export default function Workspace() {
                  interrupts Claude. More old-bar buttons return here only as
                  they prove needed. */
               <View style={s.chatBar}>
-                <Pressable style={s.cbtn} onPress={toggleChat}>
-                  <Text style={s.klabel}>🖥</Text>
-                </Pressable>
+                {/* while typing, the mode toggle yields its slot to ⌄
+                    (collapse keyboard) — you don't flip views mid-message,
+                    but you do want your reading space back */}
+                {kbUp ? (
+                  <Pressable style={s.cbtn} onPress={() => Keyboard.dismiss()}>
+                    <Text style={[s.klabel, { fontWeight: '700' }]}>⌄</Text>
+                  </Pressable>
+                ) : (
+                  <Pressable style={s.cbtn} onPress={toggleChat}>
+                    <Text style={s.klabel}>🖥</Text>
+                  </Pressable>
+                )}
                 <Pressable style={s.cbtn} onPress={openHist}>
                   <Text style={s.klabel}>🕘</Text>
                 </Pressable>
                 <TextInput
-                  style={s.chatInput}
+                  style={[s.chatInput,
+                    { height: Math.min(120, Math.max(44, composerH + 24)) }]}
                   multiline
-                  placeholder="Message — tap 🎤 on the keyboard to dictate"
+                  onContentSizeChange={(e) =>
+                    setComposerH(e.nativeEvent.contentSize.height)}
+                  placeholder="Message (🎤 to dictate)"
                   placeholderTextColor={C.muted}
                   value={dictText} onChangeText={setDictText}
                 />
