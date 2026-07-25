@@ -17,13 +17,14 @@ import * as FileSystem from 'expo-file-system/legacy';
 import * as ImagePicker from 'expo-image-picker';
 import * as SecureStore from 'expo-secure-store';
 import {
-  ApiError, ChatMsg as ChatMsgT, claudeTranscript, deleteProject, getProjects,
-  Project, setProjectHidden, termBuffer, termCapture, termKey, termMouse,
-  termPaste, termUrl, uploadFile,
+  ApiError, ChatMsg as ChatMsgT, claudeTranscript, createProject, deleteProject,
+  getProjects, Project, setProjectHidden, termBuffer, termCapture, termKey,
+  termMouse, termPaste, termUrl, uploadFile,
 } from '@/lib/api';
 import { Box, loadBoxes, tokenAlive } from '@/lib/boxes';
 import { C } from '@/lib/theme';
 import { TCTerminal, TCTerminalView } from '../../modules/tc-terminal';
+import { SelText, selTextAvailable } from '../../modules/tc-seltext';
 
 const KEYS: Array<{ label: string; key: string; wide?: boolean }> = [
   { label: '↑', key: 'up' }, { label: '↓', key: 'down' },
@@ -361,6 +362,37 @@ export default function Workspace() {
     setTimeout(() => setCopied(false), 1500);
   };
 
+  // ＋ new tab — name + directory, straight onto the server registry (the
+  // web dashboard's add-project, which didn't survive the app migration).
+  // Missing directory → offer to create it (server mkdir -p on retry).
+  const [addingTab, setAddingTab] = useState(false);
+  const [newName, setNewName] = useState('');
+  const [newDir, setNewDir] = useState('');
+  const submitNewTab = async (create: boolean) => {
+    if (!box) return;
+    const name = newName.trim(), dir = newDir.trim();
+    if (!name || !dir) return;
+    try {
+      const r = await createProject(box, name, dir, create);
+      setAddingTab(false);
+      setNewName('');
+      setNewDir('');
+      await loadProjects();
+      setStatus('connecting');
+      setProjectId(r.id);
+    } catch (e) {
+      if (e instanceof ApiError && e.body?.missing_dir) {
+        Alert.alert('Directory not found', `Create ${dir}?`, [
+          { text: 'Cancel', style: 'cancel' },
+          { text: 'Create it', onPress: () => void submitNewTab(true) },
+        ]);
+      } else {
+        Alert.alert('Could not add tab',
+          e instanceof Error ? e.message : String(e));
+      }
+    }
+  };
+
   // long-press a project: hide/unhide/delete (mirrors the web sidebar's − and 🗑)
   const projectMenu = (p: Project) => {
     if (!box) return;
@@ -471,6 +503,9 @@ export default function Workspace() {
                   </Pressable>
                 )}
                 {showHidden && hidden.map((p) => projectRow(p, false))}
+                <Pressable style={s.hiddenHdr} onPress={() => setAddingTab(true)}>
+                  <Text style={s.hiddenHdrTxt}>＋ New tab</Text>
+                </Pressable>
               </ScrollView>
               {/* tab zoom for big monitors */}
               <View style={s.zoomRow}>
@@ -496,6 +531,10 @@ export default function Workspace() {
                   </Pressable>
                 )}
                 {showHidden && hidden.map((p) => projectRow(p, true))}
+                <Pressable style={[s.pchip, { borderLeftColor: 'transparent' }]}
+                  onPress={() => setAddingTab(true)}>
+                  <Text style={s.pname}>＋</Text>
+                </Pressable>
               </ScrollView>
             )}
             {box && project && chatActive ? (
@@ -518,30 +557,48 @@ export default function Workspace() {
                     {chatAvail === null ? 'Loading conversation…' : 'No messages yet.'}
                   </Text>
                 }
-                renderItem={({ item }) => (
-                  <Pressable
-                    style={[s.chatMsg, item.role === 'user' && s.chatUser]}
-                    onLongPress={() => {
-                      void Clipboard.setStringAsync(item.text);
-                      setCopied(true);
-                      setTimeout(() => setCopied(false), 1500);
-                    }}
-                  >
-                    <Text
-                      selectable
-                      style={[
-                        s.histText,
-                        item.role === 'user' && { color: C.accent },
-                        (item.role === 'tool' || item.role === 'result') && s.chatDim,
-                      ]}
+                renderItem={({ item }) => {
+                  const body = item.role === 'user' ? `❯ ${item.text}`
+                    : item.role === 'tool' ? `● ${item.text}`
+                    : item.role === 'result' ? `  ⎿ ${item.text}`
+                    : item.text;
+                  const dim = item.role === 'tool' || item.role === 'result';
+                  // native bubble: a real UITextView — drag-handle/mouse
+                  // range selection and Cmd-C, which RN <Text> can't do
+                  if (selTextAvailable) {
+                    return (
+                      <View style={[s.chatMsg, item.role === 'user' && s.chatUser]}>
+                        <SelText
+                          text={body}
+                          fontSize={dim ? 11 : 12}
+                          color={item.role === 'user' ? C.accent
+                            : dim ? C.muted : C.text}
+                        />
+                      </View>
+                    );
+                  }
+                  return (
+                    <Pressable
+                      style={[s.chatMsg, item.role === 'user' && s.chatUser]}
+                      onLongPress={() => {
+                        void Clipboard.setStringAsync(item.text);
+                        setCopied(true);
+                        setTimeout(() => setCopied(false), 1500);
+                      }}
                     >
-                      {item.role === 'user' ? `❯ ${item.text}`
-                        : item.role === 'tool' ? `● ${item.text}`
-                        : item.role === 'result' ? `  ⎿ ${item.text}`
-                        : item.text}
-                    </Text>
-                  </Pressable>
-                )}
+                      <Text
+                        selectable
+                        style={[
+                          s.histText,
+                          item.role === 'user' && { color: C.accent },
+                          dim && s.chatDim,
+                        ]}
+                      >
+                        {body}
+                      </Text>
+                    </Pressable>
+                  );
+                }}
               />
             ) : box && project && nativeOn && TCTerminalView ? (
               <TCTerminalView
@@ -749,6 +806,40 @@ export default function Workspace() {
         </View>
       </Modal>
 
+      {/* ＋ new tab — name + directory (server expands ~) */}
+      <Modal visible={addingTab} transparent animationType="fade"
+        onRequestClose={() => setAddingTab(false)}>
+        <KeyboardAvoidingView
+          behavior={Platform.OS === 'ios' ? 'padding' : undefined}
+          style={s.dictWrap}
+        >
+          <View style={s.dictBox}>
+            <Text style={s.dictTitle}>＋ New tab</Text>
+            <TextInput
+              style={s.addInput} autoFocus
+              placeholder="Name" placeholderTextColor={C.muted}
+              value={newName} onChangeText={setNewName}
+            />
+            <TextInput
+              style={s.addInput}
+              autoCapitalize="none" autoCorrect={false}
+              placeholder="Directory (e.g. ~/projects/foo)"
+              placeholderTextColor={C.muted}
+              value={newDir} onChangeText={setNewDir}
+            />
+            <View style={s.dictBtns}>
+              <Pressable style={s.kbtn} onPress={() => setAddingTab(false)}>
+                <Text style={{ color: C.muted }}>Cancel</Text>
+              </Pressable>
+              <Pressable style={[s.kbtn, s.kwide, { backgroundColor: C.accent }]}
+                onPress={() => void submitNewTab(false)}>
+                <Text style={{ color: C.bg, fontWeight: '600' }}>Add</Text>
+              </Pressable>
+            </View>
+          </View>
+        </KeyboardAvoidingView>
+      </Modal>
+
       {/* 🎤 dictation box — iOS dictation streams partial phrases, and typing
           those straight into xterm duplicates every fragment. A native input
           captures it cleanly; Send bracketed-pastes it onto the prompt
@@ -892,6 +983,10 @@ const s = StyleSheet.create({
     borderRadius: 8, color: C.text, padding: 11, fontSize: 16,
   },
   dictBtns: { flexDirection: 'row', gap: 8, justifyContent: 'flex-end' },
+  addInput: {
+    backgroundColor: C.bg, borderColor: C.border, borderWidth: 1,
+    borderRadius: 8, color: C.text, padding: 11, fontSize: 16,
+  },
   histScroll: {
     flex: 1, backgroundColor: '#000', borderRadius: 8,
     borderWidth: 1, borderColor: C.border, padding: 8,

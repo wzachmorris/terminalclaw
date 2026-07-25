@@ -2,7 +2,7 @@
 import { Box } from './boxes';
 
 export class ApiError extends Error {
-  constructor(public status: number, msg: string) { super(msg); }
+  constructor(public status: number, msg: string, public body?: any) { super(msg); }
 }
 
 async function req(url: string, init?: RequestInit): Promise<any> {
@@ -13,7 +13,7 @@ async function req(url: string, init?: RequestInit): Promise<any> {
     throw new ApiError(0, 'unreachable');
   }
   const body = await r.json().catch(() => ({}));
-  if (!r.ok) throw new ApiError(r.status, body.error || `HTTP ${r.status}`);
+  if (!r.ok) throw new ApiError(r.status, body.error || `HTTP ${r.status}`, body);
   return body;
 }
 
@@ -49,6 +49,18 @@ export async function getProjects(box: Box):
 export function termUrl(box: Box, projectId: string): string {
   return `${box.url}/static/term.html?arg=${encodeURIComponent(projectId)}` +
          `&token=${encodeURIComponent(box.token)}`;
+}
+
+// ＋ new tab: name + directory (server expands ~). With create=false a
+// missing directory 400s with {missing_dir: true} so the caller can offer
+// to mkdir -p it via a create=true retry.
+export async function createProject(box: Box, name: string, dir: string, create = false):
+    Promise<{ id: string }> {
+  return req(`${box.url}/api/project`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', 'X-TC-Token': box.token },
+    body: JSON.stringify({ name, dir, create }),
+  });
 }
 
 export async function setProjectHidden(box: Box, project: string, hidden: boolean) {
