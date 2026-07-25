@@ -1,6 +1,7 @@
 {
   "platforms": ["apple"],
   "apple": {
-    "modules": ["TCTerminalModule"]
+    "modules": ["TCTerminalModule"],
+    "podspecPath": "TCTerminal.podspec"
   }
 }

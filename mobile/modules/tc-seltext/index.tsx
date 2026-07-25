@@ -1,7 +1,7 @@
 // JS surface for the native selectable-text module. Loaded defensively like
 // tc-terminal: binaries built before this module existed (or non-iOS
 // platforms) get null and the chat falls back to RN <Text selectable>.
-import { requireNativeViewManager } from 'expo-modules-core';
+import { requireNativeModule, requireNativeViewManager } from 'expo-modules-core';
 import * as React from 'react';
 import { useState } from 'react';
 import type { StyleProp, ViewStyle } from 'react-native';
@@ -16,6 +16,10 @@ type NativeProps = {
 
 let Native: React.ComponentType<NativeProps> | null = null;
 try {
+  // requireNativeViewManager resolves lazily and NEVER throws — probing the
+  // module registry is what actually detects a binary without the native
+  // side (otherwise every bubble renders as a red "Unimplemented component")
+  requireNativeModule('TCSelText');
   Native = requireNativeViewManager<NativeProps>('TCSelText');
 } catch {
   // native module not present in this binary
