@@ -179,8 +179,6 @@ export default function Workspace() {
   const [chatAvail, setChatAvail] = useState<boolean | null>(null);
   const chatSince = useRef('');
   const chatActive = chatOn && chatAvail !== false;
-  // phone chat = lean bar: Dictate, Copy, 🕘, Esc, ⏎, mode toggle
-  const lean = chatActive && !wide;
   useEffect(() => {
     if (!chatOn || !box || !project) return;
     const b = box, pid = project.id;
@@ -251,6 +249,13 @@ export default function Workspace() {
       const r = await termCapture(box, project.id);
       setHistText(r.content.replace(/\s+$/, ''));
     } catch { setHistText('(could not load history)'); }
+  };
+  // composer send: clear the box, then paste + ⏎ the text
+  const swallowNewline = useRef(false);
+  const composerSubmit = () => {
+    const t = dictText;
+    setDictText('');
+    if (t.trim()) void sendSubmit(t);
   };
   // paste + ⏎ — actually submits the message instead of leaving it on the
   // prompt for review; sequential so Enter can't outrun the paste
@@ -531,12 +536,13 @@ export default function Workspace() {
                 </Text>
               </View>
             )}
-            {lean ? (
-              /* phone chat: the input IS the bar — a messaging-app composer.
-                 iOS keyboard mic dictates straight into it; Send ⏎ submits.
-                 🖥 flips to terminal, 🕘 peeks at the raw screen, Esc
-                 interrupts Claude. More old-bar buttons return here only as
-                 they prove needed. */
+            {chatActive ? (
+              /* chat (all widths): the input IS the bar — a messaging-app
+                 composer. On phones the keyboard mic dictates straight into
+                 it; on hardware keyboards (Mac) ⏎ submits directly. 🖥 flips
+                 to terminal, 🕘 peeks at the raw screen, 📄 (wide) copies the
+                 latest response, Esc interrupts Claude. More old-bar buttons
+                 return here only as they prove needed. */
               <View style={s.chatBar}>
                 {/* while typing, the mode toggle yields its slot to ⌄
                     (collapse keyboard) — you don't flip views mid-message,
@@ -559,20 +565,35 @@ export default function Workspace() {
                   multiline
                   onContentSizeChange={(e) =>
                     setComposerH(e.nativeEvent.contentSize.height)}
-                  placeholder="Message (🎤 to dictate)"
+                  placeholder={wide ? 'Message — ⏎ sends' : 'Message (🎤 to dictate)'}
                   placeholderTextColor={C.muted}
-                  value={dictText} onChangeText={setDictText}
+                  value={dictText}
+                  /* wide = hardware keyboard: a bare ⏎ sends instead of adding
+                     a newline (the guard swallows the '\n' that follows the
+                     keypress; a multiline paste never matches key 'Enter') */
+                  onKeyPress={wide ? (e) => {
+                    if (e.nativeEvent.key === 'Enter') {
+                      swallowNewline.current = true;
+                      composerSubmit();
+                    }
+                  } : undefined}
+                  onChangeText={(t) => {
+                    if (swallowNewline.current) {
+                      swallowNewline.current = false;
+                      return;
+                    }
+                    setDictText(t);
+                  }}
                 />
+                {wide && (
+                  <Pressable style={s.cbtn} onPress={copyOut}>
+                    <Text style={s.klabel}>{copied ? '✓' : '📄'}</Text>
+                  </Pressable>
+                )}
                 <Pressable style={s.cbtn} onPress={() => sendKey('esc')}>
                   <Text style={s.klabel}>Esc</Text>
                 </Pressable>
-                <Pressable
-                  style={[s.cbtn, s.cSend]}
-                  onPress={() => {
-                    const t = dictText;
-                    setDictText('');
-                    if (t.trim()) void sendSubmit(t);
-                  }}>
+                <Pressable style={[s.cbtn, s.cSend]} onPress={composerSubmit}>
                   <Text style={{ color: C.bg, fontWeight: '700' }}>⏎</Text>
                 </Pressable>
               </View>
@@ -588,11 +609,9 @@ export default function Workspace() {
                 onPress={() => { setDictText(''); setDictating(true); }}>
                 <Text style={s.klabel}>🎤 Dictate</Text>
               </Pressable>
-              {!lean && (
-                <Pressable style={[s.kbtn, s.kwide]} onPress={paste}>
-                  <Text style={s.klabel}>📋 Paste</Text>
-                </Pressable>
-              )}
+              <Pressable style={[s.kbtn, s.kwide]} onPress={paste}>
+                <Text style={s.klabel}>📋 Paste</Text>
+              </Pressable>
               <Pressable style={[s.kbtn, s.kwide]} onPress={copyOut}>
                 <Text style={s.klabel}>{copied ? '✓ Copied' : '📄 Copy'}</Text>
               </Pressable>
@@ -612,8 +631,7 @@ export default function Workspace() {
                 </Pressable>
               )}
               <View style={s.sep} />
-              {(lean ? KEYS.filter((k) => k.key === 'esc' || k.key === 'enter') : KEYS)
-                .map((k) => (
+              {KEYS.map((k) => (
                 <Pressable key={k.key} style={[s.kbtn, k.wide && s.kwide]}
                   onPress={() => sendKey(k.key)}>
                   <Text style={s.klabel}>{k.label}</Text>
