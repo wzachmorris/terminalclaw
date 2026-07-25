@@ -386,6 +386,9 @@ export default function Workspace() {
     }
   };
 
+  // terminal-mode ⌨ drawer — the key row and edit buttons fold away since
+  // chat mode owns reading/copying/composing now
+  const [keysOpen, setKeysOpen] = useState(false);
   // 📜 tmux mouse/scroll mode — on by default fleet-wide (term.sh); this
   // toggles it per-session for when you want selection-style dragging.
   const [mouseOn, setMouseOn] = useState(true);
@@ -799,17 +802,16 @@ export default function Workspace() {
               showsHorizontalScrollIndicator={false}
               style={s.bar} contentContainerStyle={s.barInner}
             >
-              {/* the heavy-rotation buttons live first: dictate/copy are the
-                  phone workflow; the key row scrolls in behind them */}
-              <Pressable style={[s.kbtn, s.kwide]}
-                onPress={() => { setDictText(''); setDictating(true); }}>
-                <Text style={s.klabel}>🎤 Dictate</Text>
+              {/* terminal mode is just a terminal now — chat owns reading,
+                  copying and composing. Slim bar: back to chat, the ⌨ key
+                  drawer, scrollback, engine toggles. Everything else folds
+                  into ⌨. */}
+              <Pressable style={[s.kbtn, s.kwide]} onPress={toggleChat}>
+                <Text style={s.klabel}>💬 Chat</Text>
               </Pressable>
-              <Pressable style={[s.kbtn, s.kwide]} onPress={paste}>
-                <Text style={s.klabel}>📋 Paste</Text>
-              </Pressable>
-              <Pressable style={[s.kbtn, s.kwide]} onPress={copyOut}>
-                <Text style={s.klabel}>{copied ? '✓ Copied' : '📄 Copy'}</Text>
+              <Pressable style={[s.kbtn, keysOpen && { borderColor: C.accent }]}
+                onPress={() => setKeysOpen(!keysOpen)}>
+                <Text style={[s.klabel, keysOpen && { color: C.accent }]}>⌨</Text>
               </Pressable>
               {/* 🕘 raw-screen scrollback — the way to see TUI-only things
                   (permission prompts, menus) without switching views */}
@@ -819,44 +821,51 @@ export default function Workspace() {
               {/* 📜 tmux mouse mode only matters where real wheel events exist
                   (trackpad/mouse). On phones a swipe becomes a tmux drag, not a
                   scroll — the toggle is invisible there, so don't show it. */}
-              {wide && !chatActive && (
+              {wide && (
                 <Pressable
                   style={[s.kbtn, mouseOn && { borderColor: C.accent }]}
                   onPress={toggleMouse}>
                   <Text style={[s.klabel, mouseOn && { color: C.accent }]}>📜</Text>
                 </Pressable>
               )}
-              <View style={s.sep} />
-              {KEYS.map((k) => (
-                <Pressable key={k.key} style={[s.kbtn, k.wide && s.kwide]}
-                  onPress={() => sendKey(k.key)}>
-                  <Text style={s.klabel}>{k.label}</Text>
-                </Pressable>
-              ))}
-              {/* dismisses the phone's on-screen keyboard — pointless with a
-                  hardware keyboard, so wide screens don't get it */}
-              {!wide && !nativeOn && !chatActive && (
-                <Pressable style={[s.kbtn, s.kwide]} onPress={() => js('TC.blurKeyboard()')}>
-                  <Text style={s.klabel}>⌨ Hide</Text>
-                </Pressable>
-              )}
-              {/* ⚡ v2 native terminal (SwiftTerm) — only offered when this
-                  binary contains the module; WebView remains the fallback */}
-              {!!TCTerminalView && !chatActive && (
+              {/* ⚡ engine toggle: WebView xterm.js ↔ native SwiftTerm — only
+                  offered when this binary contains the module */}
+              {!!TCTerminalView && (
                 <Pressable
-                  style={[s.kbtn, s.kwide, nativeOn && { borderColor: C.accent }]}
+                  style={[s.kbtn, nativeOn && { borderColor: C.accent }]}
                   onPress={toggleNative}>
                   <Text style={[s.klabel, nativeOn && { color: C.accent }]}>⚡</Text>
                 </Pressable>
               )}
-              {/* 💬 chat ↔ 🖥 live terminal */}
-              <Pressable
-                style={[s.kbtn, s.kwide, chatOn && { borderColor: C.accent }]}
-                onPress={toggleChat}>
-                <Text style={[s.klabel, chatOn && { color: C.accent }]}>
-                  {chatOn ? '🖥 Term' : '💬 Chat'}
-                </Text>
-              </Pressable>
+              {keysOpen && (
+                <>
+                  <View style={s.sep} />
+                  <Pressable style={s.kbtn}
+                    onPress={() => { setDictText(''); setDictating(true); }}>
+                    <Text style={s.klabel}>🎤</Text>
+                  </Pressable>
+                  <Pressable style={s.kbtn} onPress={paste}>
+                    <Text style={s.klabel}>📋</Text>
+                  </Pressable>
+                  <Pressable style={s.kbtn} onPress={copyOut}>
+                    <Text style={s.klabel}>{copied ? '✓' : '📄'}</Text>
+                  </Pressable>
+                  {KEYS.map((k) => (
+                    <Pressable key={k.key} style={[s.kbtn, k.wide && s.kwide]}
+                      onPress={() => sendKey(k.key)}>
+                      <Text style={s.klabel}>{k.label}</Text>
+                    </Pressable>
+                  ))}
+                  {/* dismisses the phone's on-screen keyboard — pointless with
+                      a hardware keyboard, so wide screens don't get it */}
+                  {!wide && !nativeOn && (
+                    <Pressable style={[s.kbtn, s.kwide]}
+                      onPress={() => js('TC.blurKeyboard()')}>
+                      <Text style={s.klabel}>⌨ Hide</Text>
+                    </Pressable>
+                  )}
+                </>
+              )}
             </ScrollView>
             )}
           </DropWrap>
