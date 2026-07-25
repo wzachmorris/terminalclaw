@@ -124,10 +124,18 @@ export default function Workspace() {
     });
   }, [boxId]));
 
+  // box-switch speedups: keep every box's last-known project list and every
+  // tab's chat state in memory. Switching renders the cached view instantly
+  // and refreshes in the background instead of tearing down to "Loading…".
+  const projCache = useRef<Record<string, Project[]>>({});
+  const chatCache = useRef<Record<string,
+    { msgs: ChatMsgT[]; since: string; avail: boolean | null }>>({});
+
   const loadProjects = useCallback(() => {
     if (!box) return Promise.resolve();
     const bid = box.id;
     return getProjects(box).then((d) => {
+      projCache.current[bid] = d.projects;
       setProjects(d.projects);
       setProjectId((cur) => {
         if (cur && d.projects.some((p) => p.id === cur)) return cur;
@@ -145,6 +153,23 @@ export default function Workspace() {
     const t = setInterval(() => void loadProjects(), 15000);
     return () => clearInterval(t);
   }, [loadProjects, prefsReady]);
+
+  // warm the OTHER boxes' project lists in the background so a first switch
+  // has data waiting (the Pis are an ocean away — hide the RTT, don't pay it)
+  const boxesKey = boxes.map((b) => b.id).join(',');
+  useEffect(() => {
+    if (!boxes.length) return;
+    const warm = () => boxes.forEach((b) => {
+      if (b.id !== boxId && tokenAlive(b)) {
+        void getProjects(b)
+          .then((d) => { projCache.current[b.id] = d.projects; })
+          .catch(() => { /* offline box — nothing to warm */ });
+      }
+    });
+    warm();
+    const t = setInterval(warm, 60000);
+    return () => clearInterval(t);
+  }, [boxesKey, boxId]);
 
   // ⚡ native SwiftTerm terminal (v2) — opt-in, WebView stays the fallback.
   // Native sessions live in the module's manager keyed by box:project:token
@@ -185,23 +210,41 @@ export default function Workspace() {
   const chatSince = useRef('');
   const chatActive = chatOn && chatAvail !== false;
   useEffect(() => {
-    if (!chatOn || !box || !project) return;
-    const b = box, pid = project.id;
-    setChatMsgs([]);
-    setChatAvail(null);
-    chatSince.current = '';
+    if (!chatOn || !box || !projectId) return;
+    const b = box, pid = projectId;
+    const key = `${b.id}:${pid}`;
+    // seed from cache: revisiting a tab shows its conversation immediately
+    // and the poll catches up incrementally from the saved cursor. Keyed on
+    // projectId (not the project object) so the first pull races the
+    // project-list fetch after a box switch instead of queuing behind it.
+    const cached = chatCache.current[key];
+    setChatMsgs(cached?.msgs ?? []);
+    setChatAvail(cached?.avail ?? null);
+    chatSince.current = cached?.since ?? '';
     let live = true;
     const pull = async () => {
       try {
         const r = await claudeTranscript(b, pid, chatSince.current);
         if (!live) return;
-        if (r.session === null) { setChatAvail(false); return; }
+        if (r.session === null) {
+          setChatAvail(false);
+          chatCache.current[key] = { msgs: [], since: '', avail: false };
+          return;
+        }
         setChatAvail(true);
         const first = chatSince.current === '';
         chatSince.current = `${r.session}:${r.offset}`;
         if (r.messages.length || r.reset) {
-          setChatMsgs((cur) => (first || r.reset)
-            ? r.messages : [...cur, ...r.messages]);
+          setChatMsgs((cur) => {
+            const next = (first || r.reset) ? r.messages : [...cur, ...r.messages];
+            chatCache.current[key] = { msgs: next, since: chatSince.current, avail: true };
+            return next;
+          });
+        } else {
+          const c = chatCache.current[key];
+          chatCache.current[key] = {
+            msgs: c?.msgs ?? [], since: chatSince.current, avail: true,
+          };
         }
         setStatus('up');
       } catch (e) {
@@ -214,7 +257,7 @@ export default function Workspace() {
     void pull();
     const t = setInterval(() => void pull(), 2000);
     return () => { live = false; clearInterval(t); };
-  }, [chatOn, box?.id, box?.token, project?.id]);
+  }, [chatOn, box?.id, box?.token, projectId]);
   // inverted list wants newest-first
   const chatData = useMemo(() => [...chatMsgs].reverse(), [chatMsgs]);
 
@@ -449,7 +492,19 @@ export default function Workspace() {
         'Go back to the machines screen and log in again.');
       return;
     }
-    if (b.id !== boxId) { setProjectId(undefined); setProjects([]); setBoxId(b.id); }
+    if (b.id === boxId) return;
+    // render the cached list instantly and jump straight to the remembered
+    // tab — the chat effect keys off projectId, so the transcript fetch
+    // races the project-list refresh instead of waiting behind it
+    const cached = projCache.current[b.id];
+    const remembered = lastByBox.current[b.id];
+    setProjects(cached ?? []);
+    setProjectId(
+      cached && remembered && cached.some((p) => p.id === remembered) ? remembered
+        : cached ? cached.find((p) => !p.hidden)?.id
+        : remembered);
+    setStatus('connecting');
+    setBoxId(b.id);
   };
 
   // stretch rows to consume the sidebar: available height / slot count,
