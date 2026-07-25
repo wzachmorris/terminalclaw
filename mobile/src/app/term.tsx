@@ -23,7 +23,6 @@ import {
 } from '@/lib/api';
 import { Box, loadBoxes, tokenAlive } from '@/lib/boxes';
 import { C } from '@/lib/theme';
-import { TCTerminal, TCTerminalView } from '../../modules/tc-terminal';
 import { SelText, selTextAvailable } from '../../modules/tc-seltext';
 import { DropEvent, TCDropZone } from '../../modules/tc-dropzone';
 
@@ -34,13 +33,6 @@ const KEYS: Array<{ label: string; key: string; wide?: boolean }> = [
   { label: '⇧⇥', key: 'btab', wide: true },
   { label: '^C', key: 'ctrl-c' }, { label: '⏎', key: 'enter' },
 ];
-
-// byte sequences for the native terminal path (term.html has its own copy)
-const SEQ: Record<string, string> = {
-  up: '\u001b[A', down: '\u001b[B', left: '\u001b[D', right: '\u001b[C',
-  esc: '\u001b', tab: '\t', btab: '\u001b[Z', enter: '\r',
-  'ctrl-c': '\u0003',
-};
 
 export default function Workspace() {
   const params = useLocalSearchParams<{ box?: string; project?: string }>();
@@ -65,7 +57,6 @@ export default function Workspace() {
       ios ? 'keyboardWillHide' : 'keyboardDidHide', () => setKbUp(false));
     return () => { show.remove(); hide.remove(); };
   }, []);
-  const [histText, setHistText] = useState<string | null>(null);   // 🕘 modal
   const web = useRef<WebView>(null);
   const lastSel = useRef('');
   const wide = useWindowDimensions().width >= 700;
@@ -171,22 +162,6 @@ export default function Workspace() {
     return () => clearInterval(t);
   }, [boxesKey, boxId]);
 
-  // ⚡ native SwiftTerm terminal (v2) — opt-in, WebView stays the fallback.
-  // Native sessions live in the module's manager keyed by box:project:token
-  // tail, so tab/box switches just re-show a live view: instant, scrollback
-  // intact, no WebKit suspension games.
-  const [nativePref, setNativePref] = useState(false);
-  useEffect(() => {
-    void SecureStore.getItemAsync('tc.nativeTerm').then((r) => setNativePref(r === '1'));
-  }, []);
-  const nativeOn = nativePref && !!TCTerminalView && !!TCTerminal;
-  const toggleNative = () => {
-    const next = !nativePref;
-    setNativePref(next);
-    void SecureStore.setItemAsync('tc.nativeTerm', next ? '1' : '0');
-    if (!next) TCTerminal?.disconnectAll();
-    setStatus('connecting');
-  };
   // 💬 chat view — the session's Claude conversation read from the transcript
   // file Claude Code already writes on the server: real message objects, not
   // screen-scraping. Incremental polling (only new bytes), a virtualized list
@@ -261,13 +236,6 @@ export default function Workspace() {
   // inverted list wants newest-first
   const chatData = useMemo(() => [...chatMsgs].reverse(), [chatMsgs]);
 
-  const sessionKey = box && project
-    ? `${box.id}:${project.id}:${box.token.slice(-8)}` : '';
-  const wsEndpoint = box && project
-    ? `${box.url.replace(/^http/i, 'ws')}/terminal/ws?arg=${encodeURIComponent(project.id)}` +
-      `&token=${encodeURIComponent(box.token)}`
-    : '';
-
   const js = useCallback((code: string) => {
     web.current?.injectJavaScript(`window.TC && (${code}); true;`);
   }, []);
@@ -276,27 +244,16 @@ export default function Workspace() {
   // server's send-keys/paste endpoints — no live terminal connection needed.
   const sendKey = (k: string) => {
     if (chatActive) { if (box && project) void termKey(box, project.id, k).catch(() => {}); }
-    else if (nativeOn && sessionKey) TCTerminal!.send(sessionKey, SEQ[k] ?? k);
     else js(`TC.key(${JSON.stringify(k)})`);
   };
   const sendPaste = (t: string) => {
     if (chatActive) { if (box && project) void termPaste(box, project.id, t).catch(() => {}); }
-    else if (nativeOn && sessionKey) TCTerminal!.send(sessionKey, `\u001b[200~${t}\u001b[201~`);
     else js(`TC.paste(${JSON.stringify(t)})`);
   };
 
   const paste = async () => {
     const t = await Clipboard.getStringAsync();
     if (t) sendPaste(t);
-  };
-  // 🕘 raw-screen scrollback modal
-  const openHist = async () => {
-    if (!box || !project) return;
-    setHistText('');
-    try {
-      const r = await termCapture(box, project.id);
-      setHistText(r.content.replace(/\s+$/, ''));
-    } catch { setHistText('(could not load history)'); }
   };
   // 📎 attach: pick a screenshot (Photos on the phone, a file panel on the
   // Mac), upload it to the box, and drop the server-side path into the
@@ -419,9 +376,6 @@ export default function Workspace() {
       return;
     }
     let text = '';
-    if (nativeOn && sessionKey) {
-      try { text = await TCTerminal!.getSelection(sessionKey); } catch { /* fall through */ }
-    }
     if (!text) {
       try { text = (await termBuffer(box)).content; } catch { /* fall through */ }
     }
@@ -691,18 +645,6 @@ export default function Workspace() {
                   );
                 }}
               />
-            ) : box && project && nativeOn && TCTerminalView ? (
-              <TCTerminalView
-                key={sessionKey}
-                sessionKey={sessionKey}
-                endpoint={wsEndpoint}
-                fontSize={13}
-                style={s.web}
-                onStatus={(e) => {
-                  const st = e.nativeEvent.status;
-                  setStatus(st === 'up' ? 'up' : st === 'down' ? 'down' : 'connecting');
-                }}
-              />
             ) : box && project ? (
               <WebView
                 key={`${box.id}:${project.id}`}
@@ -738,7 +680,7 @@ export default function Workspace() {
               /* chat (all widths): the input IS the bar — a messaging-app
                  composer. On phones the keyboard mic dictates straight into
                  it; on hardware keyboards (Mac) ⏎ submits directly. 🖥 flips
-                 to terminal (where 🕘 scrollback lives), 📎 attaches a
+                 to terminal, 📎 attaches a
                  screenshot, 📄 (wide) copies the latest response, Esc
                  interrupts Claude. More old-bar buttons return here only as
                  they prove needed. */
@@ -813,11 +755,6 @@ export default function Workspace() {
                 onPress={() => setKeysOpen(!keysOpen)}>
                 <Text style={[s.klabel, keysOpen && { color: C.accent }]}>⌨</Text>
               </Pressable>
-              {/* 🕘 raw-screen scrollback — the way to see TUI-only things
-                  (permission prompts, menus) without switching views */}
-              <Pressable style={s.kbtn} onPress={openHist}>
-                <Text style={s.klabel}>🕘</Text>
-              </Pressable>
               {/* 📜 tmux mouse mode only matters where real wheel events exist
                   (trackpad/mouse). On phones a swipe becomes a tmux drag, not a
                   scroll — the toggle is invisible there, so don't show it. */}
@@ -826,15 +763,6 @@ export default function Workspace() {
                   style={[s.kbtn, mouseOn && { borderColor: C.accent }]}
                   onPress={toggleMouse}>
                   <Text style={[s.klabel, mouseOn && { color: C.accent }]}>📜</Text>
-                </Pressable>
-              )}
-              {/* ⚡ engine toggle: WebView xterm.js ↔ native SwiftTerm — only
-                  offered when this binary contains the module */}
-              {!!TCTerminalView && (
-                <Pressable
-                  style={[s.kbtn, nativeOn && { borderColor: C.accent }]}
-                  onPress={toggleNative}>
-                  <Text style={[s.klabel, nativeOn && { color: C.accent }]}>⚡</Text>
                 </Pressable>
               )}
               {keysOpen && (
@@ -858,7 +786,7 @@ export default function Workspace() {
                   ))}
                   {/* dismisses the phone's on-screen keyboard — pointless with
                       a hardware keyboard, so wide screens don't get it */}
-                  {!wide && !nativeOn && (
+                  {!wide && (
                     <Pressable style={[s.kbtn, s.kwide]}
                       onPress={() => js('TC.blurKeyboard()')}>
                       <Text style={s.klabel}>⌨ Hide</Text>
@@ -871,37 +799,6 @@ export default function Workspace() {
           </DropWrap>
         </View>
       </KeyboardAvoidingView>
-
-      {/* 🕘 history: the session's last 2000 lines in a native scroll view —
-          momentum scrolling + iOS text selection, independent of terminal
-          gesture quirks in either terminal mode */}
-      <Modal visible={histText !== null} transparent animationType="fade"
-        onRequestClose={() => setHistText(null)}>
-        <View style={s.dictWrap}>
-          <View style={[s.dictBox, { flex: 1, marginVertical: 30 }]}>
-            <Text style={s.dictTitle}>🕘 Scrollback</Text>
-            <ScrollView
-              style={s.histScroll}
-              ref={(r) => { if (r && histText) r.scrollToEnd({ animated: false }); }}
-            >
-              <Text selectable style={s.histText}>
-                {histText === '' ? 'Loading…' : histText}
-              </Text>
-            </ScrollView>
-            <View style={s.dictBtns}>
-              <Pressable style={[s.kbtn, s.kwide]} onPress={async () => {
-                if (histText) await Clipboard.setStringAsync(histText);
-              }}>
-                <Text style={{ color: C.muted }}>Copy all</Text>
-              </Pressable>
-              <Pressable style={[s.kbtn, s.kwide, { backgroundColor: C.accent }]}
-                onPress={() => setHistText(null)}>
-                <Text style={{ color: C.bg, fontWeight: '600' }}>Close</Text>
-              </Pressable>
-            </View>
-          </View>
-        </View>
-      </Modal>
 
       {/* ＋ new tab — name + directory (server expands ~) */}
       <Modal visible={addingTab} transparent animationType="fade"
@@ -1083,10 +980,6 @@ const s = StyleSheet.create({
   addInput: {
     backgroundColor: C.bg, borderColor: C.border, borderWidth: 1,
     borderRadius: 8, color: C.text, padding: 11, fontSize: 16,
-  },
-  histScroll: {
-    flex: 1, backgroundColor: '#000', borderRadius: 8,
-    borderWidth: 1, borderColor: C.border, padding: 8,
   },
   histText: {
     color: C.text, fontSize: 12,
