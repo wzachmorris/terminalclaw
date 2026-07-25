@@ -3,7 +3,7 @@
 // sidebar on wide screens, a chip strip on phones), terminal filling the
 // rest. Layout mirrors the web dashboard's always-visible sidebar instead of
 // v1's list → list → terminal drill-down.
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { ElementType, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   Alert, FlatList, Keyboard, KeyboardAvoidingView, Modal, Platform, Pressable,
   ScrollView, StyleSheet, Text, TextInput, useWindowDimensions, View,
@@ -25,6 +25,7 @@ import { Box, loadBoxes, tokenAlive } from '@/lib/boxes';
 import { C } from '@/lib/theme';
 import { TCTerminal, TCTerminalView } from '../../modules/tc-terminal';
 import { SelText, selTextAvailable } from '../../modules/tc-seltext';
+import { DropEvent, TCDropZone } from '../../modules/tc-dropzone';
 
 const KEYS: Array<{ label: string; key: string; wide?: boolean }> = [
   { label: '↑', key: 'up' }, { label: '↓', key: 'down' },
@@ -268,8 +269,34 @@ export default function Workspace() {
       Alert.alert('Upload failed', 'Could not send the file to the box.');
     } finally { setAttaching(false); }
   };
+  // native drop (Mac/iPad): the zone copied the item into app tmp; read it
+  // and ride the same upload path as 📎
+  const handleDrop = async (e: DropEvent) => {
+    const { name, path } = e.nativeEvent;
+    try {
+      const b64 = await FileSystem.readAsStringAsync(`file://${path}`,
+        { encoding: FileSystem.EncodingType.Base64 });
+      await attachUpload(name || 'dropped.png', b64);
+    } catch {
+      Alert.alert('Drop failed', 'Could not read the dropped file.');
+    }
+  };
   const attach = () => {
     Alert.alert('Attach', 'Uploads to the box and puts the file path in your message so Claude can open it.', [
+      {
+        text: 'Clipboard image',
+        onPress: () => void (async () => {
+          const img = await Clipboard.getImageAsync({ format: 'png' })
+            .catch(() => null);
+          if (!img?.data) {
+            Alert.alert('No image on the clipboard',
+              'Copy a screenshot first (⌘⇧⌃4 on the Mac), then try again.');
+            return;
+          }
+          await attachUpload('clipboard.png',
+            img.data.replace(/^data:image\/\w+;base64,/, ''));
+        })(),
+      },
       {
         text: 'Photo library',
         onPress: () => void (async () => {
@@ -455,6 +482,12 @@ export default function Workspace() {
     </Pressable>
   );
 
+  // chat column doubles as a drop target where the native zone exists —
+  // dropping a screenshot anywhere on the conversation uploads it
+  const DropWrap: ElementType = chatActive && TCDropZone ? TCDropZone : View;
+  const dropProps = chatActive && TCDropZone
+    ? { onDrop: (e: DropEvent) => void handleDrop(e) } : {};
+
   return (
     <SafeAreaView style={s.root} edges={['top', 'left', 'right']}>
       <Stack.Screen options={{ headerShown: false }} />
@@ -518,7 +551,7 @@ export default function Workspace() {
               </View>
             </View>
           )}
-          <View style={{ flex: 1 }}>
+          <DropWrap style={{ flex: 1 }} {...dropProps}>
             {/* narrow: project chip strip stays in sight above the terminal */}
             {!wide && (
               <ScrollView horizontal showsHorizontalScrollIndicator={false}
@@ -771,7 +804,7 @@ export default function Workspace() {
               </Pressable>
             </ScrollView>
             )}
-          </View>
+          </DropWrap>
         </View>
       </KeyboardAvoidingView>
 
