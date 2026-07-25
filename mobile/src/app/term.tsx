@@ -590,9 +590,10 @@ export default function Workspace() {
               /* chat (all widths): the input IS the bar — a messaging-app
                  composer. On phones the keyboard mic dictates straight into
                  it; on hardware keyboards (Mac) ⏎ submits directly. 🖥 flips
-                 to terminal, 🕘 peeks at the raw screen, 📄 (wide) copies the
-                 latest response, Esc interrupts Claude. More old-bar buttons
-                 return here only as they prove needed. */
+                 to terminal (where 🕘 scrollback lives), 📎 attaches a
+                 screenshot, 📄 (wide) copies the latest response, Esc
+                 interrupts Claude. More old-bar buttons return here only as
+                 they prove needed. */
               <View style={s.chatBar}>
                 {/* while typing, the mode toggle yields its slot to ⌄
                     (collapse keyboard) — you don't flip views mid-message,
@@ -606,9 +607,6 @@ export default function Workspace() {
                     <Text style={s.klabel}>🖥</Text>
                   </Pressable>
                 )}
-                <Pressable style={s.cbtn} onPress={openHist}>
-                  <Text style={s.klabel}>🕘</Text>
-                </Pressable>
                 <Pressable style={s.cbtn} onPress={attach} disabled={attaching}>
                   <Text style={s.klabel}>{attaching ? '⏳' : '📎'}</Text>
                 </Pressable>
