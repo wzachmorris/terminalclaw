@@ -418,6 +418,24 @@ def set_project_hidden(pid, hidden):
     return bool(hidden)
 
 
+def move_project(pid, delta):
+    """Swap a project with its neighbor in registry order (delta ±1) — the
+    registry's list order IS the tab order every client renders."""
+    reg = load_registry()
+    projects = reg.get("projects", [])
+    pid = (pid or "").strip()
+    idx = next((i for i, p in enumerate(projects) if p.get("id") == pid), None)
+    if idx is None:
+        raise ValueError("unknown project")
+    if not delta:
+        raise ValueError("delta required")
+    j = idx + (1 if delta > 0 else -1)
+    if 0 <= j < len(projects):
+        projects[idx], projects[j] = projects[j], projects[idx]
+        write_registry(reg)
+    return [p.get("id") for p in projects]
+
+
 def delete_project(pid):
     """Remove a project from the registry entirely. Files on disk are NOT
     touched; the project's tmux session is killed so it doesn't linger.
@@ -1121,6 +1139,23 @@ class Handler(BaseHTTPRequestHandler):
             except Exception as e:
                 return self._send(500, {"error": str(e)})
             return self._send(200, {"ok": True, "deleted": name})
+
+        if u.path == "/api/project/move":
+            # Reorder a tab: swap with its neighbor (delta ±1). Registry
+            # order is the tab order, so this reorders every client.
+            if not self._authed():
+                return self._send(401, {"error": "unauthorized"})
+            data = self._read_json()
+            if not isinstance(data, dict):
+                return self._send(400, {"error": "bad request"})
+            try:
+                order = move_project(data.get("project"),
+                                     int(data.get("delta") or 0))
+            except ValueError as e:
+                return self._send(400, {"error": str(e)})
+            except Exception as e:
+                return self._send(500, {"error": str(e)})
+            return self._send(200, {"ok": True, "order": order})
 
         if u.path == "/api/project/tabs/add":
             if not self._authed():

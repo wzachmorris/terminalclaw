@@ -63,6 +63,16 @@ export async function createProject(box: Box, name: string, dir: string, create 
   });
 }
 
+// reorder a tab: swap with its neighbor (delta ±1); registry order is the
+// tab order for every client
+export async function moveProject(box: Box, project: string, delta: number) {
+  return req(`${box.url}/api/project/move`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', 'X-TC-Token': box.token },
+    body: JSON.stringify({ project, delta }),
+  });
+}
+
 export async function setProjectHidden(box: Box, project: string, hidden: boolean) {
   return req(`${box.url}/api/project/hide`, {
     method: 'POST',

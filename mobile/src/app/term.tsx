@@ -18,8 +18,8 @@ import * as ImagePicker from 'expo-image-picker';
 import * as SecureStore from 'expo-secure-store';
 import {
   ApiError, ChatMsg as ChatMsgT, claudeTranscript, createProject, deleteProject,
-  getProjects, Project, setProjectHidden, termBuffer, termCapture, termKey,
-  termMouse, termPaste, termUrl, uploadFile,
+  getProjects, moveProject, Project, setProjectHidden, termBuffer, termCapture,
+  termKey, termMouse, termPaste, termUrl, uploadFile,
 } from '@/lib/api';
 import { Box, loadBoxes, tokenAlive } from '@/lib/boxes';
 import { C } from '@/lib/theme';
@@ -346,6 +346,10 @@ export default function Workspace() {
   // terminal-mode ⌨ drawer — the key row and edit buttons fold away since
   // chat mode owns reading/copying/composing now
   const [keysOpen, setKeysOpen] = useState(false);
+  // ↻ hard-reload: bumping the nonce re-keys the WebView, forcing a fresh
+  // term.html load + tmux attach — the escape hatch for the occasional
+  // wrong-terminal-in-tab attach
+  const [webNonce, setWebNonce] = useState(0);
   // 📜 tmux mouse/scroll mode — on by default fleet-wide (term.sh); this
   // toggles it per-session for when you want selection-style dragging.
   const [mouseOn, setMouseOn] = useState(true);
@@ -420,12 +424,16 @@ export default function Workspace() {
     }
   };
 
-  // long-press a project: hide/unhide/delete (mirrors the web sidebar's − and 🗑)
+  // long-press a project: move/hide/unhide/delete (mirrors the web sidebar)
   const projectMenu = (p: Project) => {
     if (!box) return;
     const b = box;
     const reload = () => void loadProjects();
     Alert.alert(p.name, undefined, [
+      { text: '↑ Move up',
+        onPress: () => void moveProject(b, p.id, -1).then(reload).catch(() => {}) },
+      { text: '↓ Move down',
+        onPress: () => void moveProject(b, p.id, 1).then(reload).catch(() => {}) },
       p.hidden
         ? { text: 'Unhide', onPress: () => void setProjectHidden(b, p.id, false).then(reload) }
         : { text: 'Hide', onPress: () => void setProjectHidden(b, p.id, true).then(reload) },
@@ -647,7 +655,7 @@ export default function Workspace() {
               />
             ) : box && project ? (
               <WebView
-                key={`${box.id}:${project.id}`}
+                key={`${box.id}:${project.id}:${webNonce}`}
                 ref={web}
                 source={{ uri: termUrl(box, project.id) }}
                 style={s.web}
@@ -754,6 +762,12 @@ export default function Workspace() {
               <Pressable style={[s.kbtn, keysOpen && { borderColor: C.accent }]}
                 onPress={() => setKeysOpen(!keysOpen)}>
                 <Text style={[s.klabel, keysOpen && { color: C.accent }]}>⌨</Text>
+              </Pressable>
+              {/* ↻ force a fresh terminal attach — for when a tab comes up
+                  showing the wrong project's session */}
+              <Pressable style={s.kbtn}
+                onPress={() => { setStatus('connecting'); setWebNonce((n) => n + 1); }}>
+                <Text style={s.klabel}>↻</Text>
               </Pressable>
               {/* 📜 tmux mouse mode only matters where real wheel events exist
                   (trackpad/mouse). On phones a swipe becomes a tmux drag, not a
