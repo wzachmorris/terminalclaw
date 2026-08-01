@@ -791,7 +791,32 @@ def term_capture(project, lines):
 def _transcript_msgs(e):
     """Flatten one Claude Code transcript entry into displayable messages.
     Skips sidechains (subagent traffic), meta entries, thinking blocks, and
-    harness-injected wrappers; tool calls/results collapse to one-liners."""
+    harness-injected wrappers; tool calls/results collapse to one-liners.
+    System entries the TUI shows between turns (recap, compaction, turn
+    timer, model-fallback notices) come through as role "system"."""
+    if e.get("type") == "system" and not e.get("isSidechain"):
+        st, ts = e.get("subtype"), e.get("timestamp", "")
+        if st == "turn_duration":
+            secs = round((e.get("durationMs") or 0) / 1000)
+            if secs < 1:
+                return []
+            return [{"role": "system", "text": "Cogitated for %ds" % secs,
+                     "ts": ts}]
+        if st in ("away_summary", "compact_boundary",
+                  "model_refusal_fallback", "model_consent_fallback"):
+            t = " ".join(str(e.get("content") or "").split())
+            if not t:
+                return []
+            if st == "away_summary":
+                t = "recap: " + t
+            elif st == "compact_boundary":
+                cm = e.get("compactMetadata") or {}
+                pre, post = cm.get("preTokens"), cm.get("postTokens")
+                if pre and post:
+                    t += " (%.1fk → %.1fk tokens)" % (pre / 1000,
+                                                           post / 1000)
+            return [{"role": "system", "text": t, "ts": ts}]
+        return []
     if e.get("type") not in ("user", "assistant") or e.get("isSidechain") or e.get("isMeta"):
         return []
     m = e.get("message") or {}

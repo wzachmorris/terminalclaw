@@ -614,8 +614,10 @@ export default function Workspace() {
                   const body = item.role === 'user' ? `❯ ${item.text}`
                     : item.role === 'tool' ? `● ${item.text}`
                     : item.role === 'result' ? `  ⎿ ${item.text}`
+                    : item.role === 'system' ? `✻ ${item.text}`
                     : item.text;
-                  const dim = item.role === 'tool' || item.role === 'result';
+                  const dim = item.role === 'tool' || item.role === 'result'
+                    || item.role === 'system';
                   // native bubble: a real UITextView — drag-handle/mouse
                   // range selection and Cmd-C, which RN <Text> can't do
                   if (selTextAvailable) {
