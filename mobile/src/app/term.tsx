@@ -98,6 +98,22 @@ export default function Workspace() {
   };
   const Z = ZOOMS[zoomI];
 
+  // chat text size — Aa in the chat bar cycles 4 steps, persisted per device
+  const CHAT_SIZES = [12, 14, 17, 20];
+  const [chatSizeI, setChatSizeI] = useState(0);
+  useEffect(() => {
+    void SecureStore.getItemAsync('tc.chatSize').then((r) => {
+      const i = r ? parseInt(r, 10) : NaN;
+      if (!Number.isNaN(i) && i >= 0 && i < CHAT_SIZES.length) setChatSizeI(i);
+    });
+  }, []);
+  const chatFs = CHAT_SIZES[chatSizeI];
+  const cycleChatSize = () => {
+    const i = (chatSizeI + 1) % CHAT_SIZES.length;
+    setChatSizeI(i);
+    void SecureStore.setItemAsync('tc.chatSize', String(i));
+  };
+
   // dynamic tab spacing: rows stretch to fill the sidebar, redistributing
   // when tabs are hidden/added — clamped so few tabs don't balloon and many
   // tabs still scroll
@@ -651,7 +667,7 @@ export default function Workspace() {
                       <View style={[s.chatMsg, item.role === 'user' && s.chatUser]}>
                         <SelText
                           text={body}
-                          fontSize={dim ? 11 : 12}
+                          fontSize={dim ? chatFs - 1 : chatFs}
                           color={item.role === 'user' ? C.accent
                             : dim ? C.muted : C.text}
                         />
@@ -673,6 +689,7 @@ export default function Workspace() {
                           s.histText,
                           item.role === 'user' && { color: C.accent },
                           dim && s.chatDim,
+                          { fontSize: dim ? chatFs - 1 : chatFs },
                         ]}
                       >
                         {body}
@@ -748,6 +765,10 @@ export default function Workspace() {
                 )}
                 <Pressable style={s.cbtn} onPress={attach} disabled={attaching}>
                   <Text style={s.klabel}>{attaching ? '⏳' : '📎'}</Text>
+                </Pressable>
+                {/* Aa: cycle chat text size (4 steps, wraps) */}
+                <Pressable style={s.cbtn} onPress={cycleChatSize}>
+                  <Text style={s.klabel}>Aa</Text>
                 </Pressable>
                 <TextInput
                   style={[s.chatInput,
