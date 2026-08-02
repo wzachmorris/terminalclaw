@@ -17,7 +17,8 @@ import * as FileSystem from 'expo-file-system/legacy';
 import * as ImagePicker from 'expo-image-picker';
 import * as SecureStore from 'expo-secure-store';
 import {
-  ApiError, ChatMsg as ChatMsgT, claudeTranscript, createProject, deleteProject,
+  ApiError, ChatMsg as ChatMsgT, ChatStatus as ChatStatusT, claudeTranscript,
+  createProject, deleteProject,
   getProjects, moveProject, Project, setProjectHidden, termBuffer, termCapture,
   termKey, termMouse, termPaste, termUrl, uploadFile,
 } from '@/lib/api';
@@ -33,6 +34,16 @@ const KEYS: Array<{ label: string; key: string; wide?: boolean }> = [
   { label: '⇧⇥', key: 'btab', wide: true },
   { label: '^C', key: 'ctrl-c' }, { label: '⏎', key: 'enter' },
 ];
+
+// TUI-footer wording for the transcript's permissionMode values
+const modeLabel = (m?: string) => m === 'auto' ? '▶▶ auto mode'
+  : m === 'acceptEdits' ? '⏵⏵ accept edits'
+  : m === 'default' ? '⏵ default mode'
+  : m === 'plan' ? '⏸ plan mode'
+  : m === 'bypassPermissions' ? '⚡ bypass permissions'
+  : m ?? '';
+const fmtTokens = (t: number) =>
+  t >= 1000 ? `${(t / 1000).toFixed(1)}k` : String(t);
 
 export default function Workspace() {
   const params = useLocalSearchParams<{ box?: string; project?: string }>();
@@ -120,7 +131,8 @@ export default function Workspace() {
   // and refreshes in the background instead of tearing down to "Loading…".
   const projCache = useRef<Record<string, Project[]>>({});
   const chatCache = useRef<Record<string,
-    { msgs: ChatMsgT[]; since: string; avail: boolean | null }>>({});
+    { msgs: ChatMsgT[]; since: string; avail: boolean | null;
+      status?: ChatStatusT }>>({});
 
   const loadProjects = useCallback(() => {
     if (!box) return Promise.resolve();
@@ -182,6 +194,10 @@ export default function Workspace() {
   };
   const [chatMsgs, setChatMsgs] = useState<ChatMsgT[]>([]);
   const [chatAvail, setChatAvail] = useState<boolean | null>(null);
+  // session status (permission mode + context size) for the strip above the
+  // composer; ref mirrors state so cache writes always see the latest
+  const [chatStatus, setChatStatus] = useState<ChatStatusT>({});
+  const chatStat = useRef<ChatStatusT>({});
   const chatSince = useRef('');
   const chatActive = chatOn && chatAvail !== false;
   useEffect(() => {
@@ -195,6 +211,8 @@ export default function Workspace() {
     const cached = chatCache.current[key];
     setChatMsgs(cached?.msgs ?? []);
     setChatAvail(cached?.avail ?? null);
+    chatStat.current = cached?.status ?? {};
+    setChatStatus(chatStat.current);
     chatSince.current = cached?.since ?? '';
     let live = true;
     const pull = async () => {
@@ -209,16 +227,24 @@ export default function Workspace() {
         setChatAvail(true);
         const first = chatSince.current === '';
         chatSince.current = `${r.session}:${r.offset}`;
+        // merge status: an incremental pull with no news sends {} — keep the
+        // last-known values; a reset (new/cleared session) starts over
+        const st = r.status ?? {};
+        chatStat.current = (first || r.reset) ? st
+          : { ...chatStat.current, ...st };
+        setChatStatus(chatStat.current);
         if (r.messages.length || r.reset) {
           setChatMsgs((cur) => {
             const next = (first || r.reset) ? r.messages : [...cur, ...r.messages];
-            chatCache.current[key] = { msgs: next, since: chatSince.current, avail: true };
+            chatCache.current[key] = { msgs: next, since: chatSince.current,
+              avail: true, status: chatStat.current };
             return next;
           });
         } else {
           const c = chatCache.current[key];
           chatCache.current[key] = {
             msgs: c?.msgs ?? [], since: chatSince.current, avail: true,
+            status: chatStat.current,
           };
         }
         setStatus('up');
@@ -686,6 +712,19 @@ export default function Workspace() {
                 </Text>
               </View>
             )}
+            {chatActive && (chatStatus.permissionMode || chatStatus.contextTokens) ? (
+              /* the TUI footer's session status: permission mode + how much
+                 context /clear would free (typing /clear in the composer
+                 actually runs it) */
+              <Text style={s.chatStatus} numberOfLines={1}>
+                {[
+                  modeLabel(chatStatus.permissionMode),
+                  chatStatus.contextTokens
+                    ? `/clear to save ${fmtTokens(chatStatus.contextTokens)} tokens`
+                    : '',
+                ].filter(Boolean).join(' · ')}
+              </Text>
+            ) : null}
             {chatActive ? (
               /* chat (all widths): the input IS the bar — a messaging-app
                  composer. On phones the keyboard mic dictates straight into
@@ -952,6 +991,10 @@ const s = StyleSheet.create({
   chatMsg: { marginVertical: 3 },
   chatUser: { marginTop: 10 },
   chatDim: { color: C.muted, fontSize: 11 },
+  chatStatus: {
+    color: C.muted, fontSize: 11, paddingHorizontal: 14, paddingVertical: 3,
+    borderTopWidth: StyleSheet.hairlineWidth, borderTopColor: C.border,
+  },
   chatBar: {
     flexDirection: 'row', alignItems: 'flex-end', gap: 6,
     padding: 8, backgroundColor: C.panel,

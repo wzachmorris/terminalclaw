@@ -131,8 +131,12 @@ export async function termKey(box: Box, project: string, key: string) {
 // Claude Code already writes — real message objects, no tmux screen-scraping.
 // `since` = "<session>:<offset>" from the previous call for incremental reads.
 export type ChatMsg = { role: string; text: string; ts: string };
+// status: last-known permission mode + context size; an incremental pull with
+// no news sends {} and the client keeps its previous values
+export type ChatStatus = { permissionMode?: string; contextTokens?: number };
 export async function claudeTranscript(box: Box, project: string, since: string):
-    Promise<{ session: string | null; offset: number; reset: boolean; messages: ChatMsg[] }> {
+    Promise<{ session: string | null; offset: number; reset: boolean; messages: ChatMsg[];
+      status?: ChatStatus }> {
   return req(`${box.url}/api/claude/transcript?project=${encodeURIComponent(project)}` +
     `&since=${encodeURIComponent(since)}`, {
     headers: { 'X-TC-Token': box.token },

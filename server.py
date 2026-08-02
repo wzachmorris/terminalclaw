@@ -854,6 +854,26 @@ def _transcript_msgs(e):
     return out
 
 
+def _transcript_status(st, e):
+    """Fold one transcript entry into the session-status dict: the active
+    permission mode (the TUI's 'auto mode on' footer) and the live context
+    size from the newest assistant turn's usage (what /clear would free).
+    Later entries win; an incremental chunk with no such entries leaves the
+    dict empty and the client keeps its last-known values."""
+    if not isinstance(e, dict):
+        return
+    t = e.get("type")
+    if t == "permission-mode" and e.get("permissionMode"):
+        st["permissionMode"] = e["permissionMode"]
+    elif t == "assistant" and not e.get("isSidechain"):
+        u = (e.get("message") or {}).get("usage") or {}
+        ctx = ((u.get("input_tokens") or 0)
+               + (u.get("cache_read_input_tokens") or 0)
+               + (u.get("cache_creation_input_tokens") or 0))
+        if ctx:
+            st["contextTokens"] = ctx
+
+
 def claude_transcript(project, since):
     """Live view of a project's Claude conversation, read from the transcript
     Claude Code already writes (~/.claude/projects/<slug>/<session>.jsonl) —
@@ -904,15 +924,18 @@ def claude_transcript(project, since):
     else:
         end = start + nl + 1
         chunk = chunk[:nl]
-    msgs = []
+    msgs, status = [], {}
     for line in chunk.splitlines():
         try:
-            msgs += _transcript_msgs(json.loads(line))
+            e = json.loads(line)
+            msgs += _transcript_msgs(e)
+            _transcript_status(status, e)
         except (ValueError, AttributeError):
             continue
     if start == 0:
         msgs = msgs[-200:]
-    return {"session": sid, "offset": end, "reset": reset, "messages": msgs}
+    return {"session": sid, "offset": end, "reset": reset, "messages": msgs,
+            "status": status}
 
 
 def term_buffer():
