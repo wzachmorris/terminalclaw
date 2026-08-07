@@ -16,6 +16,8 @@ import * as DocumentPicker from 'expo-document-picker';
 import * as FileSystem from 'expo-file-system/legacy';
 import * as ImagePicker from 'expo-image-picker';
 import * as SecureStore from 'expo-secure-store';
+import * as Speech from 'expo-speech';
+import { setAudioModeAsync } from 'expo-audio';
 import {
   ApiError, ChatMsg as ChatMsgT, ChatStatus as ChatStatusT, claudeTranscript,
   createProject, deleteProject,
@@ -250,6 +252,13 @@ export default function Workspace() {
           : { ...chatStat.current, ...st };
         setChatStatus(chatStat.current);
         if (r.messages.length || r.reset) {
+          // auto-speak: voice each newly-arrived reply, never the backlog a
+          // first load / session reset brings in
+          if (!first && !r.reset && autoSpeakRef.current) {
+            const said = r.messages.filter((m) => m.role === 'assistant')
+              .map((m) => m.text).join('. ');
+            if (said) speakText(said);
+          }
           setChatMsgs((cur) => {
             const next = (first || r.reset) ? r.messages : [...cur, ...r.messages];
             chatCache.current[key] = { msgs: next, since: chatSince.current,
@@ -273,10 +282,58 @@ export default function Workspace() {
     };
     void pull();
     const t = setInterval(() => void pull(), 2000);
-    return () => { live = false; clearInterval(t); };
+    // leaving the tab shuts the narrator up mid-sentence
+    return () => { live = false; clearInterval(t); Speech.stop(); setSpeaking(false); };
   }, [chatOn, box?.id, box?.token, projectId]);
   // inverted list wants newest-first
   const chatData = useMemo(() => [...chatMsgs].reverse(), [chatMsgs]);
+
+  // 🔊 read replies aloud on THIS device (AVSpeechSynthesizer — the phone
+  // talks, not the server). Tap = speak/stop the latest reply; long-press
+  // arms auto-speak, reading each new reply as it lands. Ref mirrors the
+  // toggle so the poll closure sees the current value.
+  const [speaking, setSpeaking] = useState(false);
+  const [autoSpeak, setAutoSpeak] = useState(false);
+  const autoSpeakRef = useRef(false);
+  useEffect(() => {
+    void SecureStore.getItemAsync('tc.autoSpeak').then((r) => {
+      autoSpeakRef.current = r === '1';
+      setAutoSpeak(r === '1');
+    });
+    // AVSpeechSynthesizer is muted by the iPhone silent switch under the
+    // default audio session — opt into playback so 🔊 works regardless
+    void setAudioModeAsync({ playsInSilentMode: true }).catch(() => {});
+  }, []);
+  const speakText = useCallback((raw: string) => {
+    // markdown reads terribly aloud — drop the syntax, keep the words
+    const t = raw
+      .replace(/```[\s\S]*?```/g, ' code block. ')
+      .replace(/`([^`]*)`/g, '$1')
+      .replace(/\[([^\]]*)\]\([^)]*\)/g, '$1')
+      .replace(/[*_#>|]+/g, ' ')
+      .replace(/\s+/g, ' ')
+      .trim();
+    if (!t) return;
+    Speech.stop();
+    setSpeaking(true);
+    Speech.speak(t, {
+      onDone: () => setSpeaking(false),
+      onStopped: () => setSpeaking(false),
+      onError: () => setSpeaking(false),
+    });
+  }, []);
+  const speakLatest = () => {
+    if (speaking) { Speech.stop(); setSpeaking(false); return; }
+    const t = [...chatMsgs].reverse().find((m) => m.role === 'assistant')?.text;
+    if (t) speakText(t);
+  };
+  const toggleAutoSpeak = () => {
+    const next = !autoSpeakRef.current;
+    autoSpeakRef.current = next;
+    setAutoSpeak(next);
+    void SecureStore.setItemAsync('tc.autoSpeak', next ? '1' : '0');
+    if (!next) { Speech.stop(); setSpeaking(false); }
+  };
 
   const js = useCallback((code: string) => {
     web.current?.injectJavaScript(`window.TC && (${code}); true;`);
@@ -770,6 +827,16 @@ export default function Workspace() {
                 <Pressable style={s.cbtn} onPress={cycleChatSize}>
                   <Text style={s.klabel}>Aa</Text>
                 </Pressable>
+                {/* 🔊 speak the latest reply (tap again stops); long-press
+                    arms auto-speak — accent border = on. Yields its slot to
+                    the input while typing on phones. */}
+                {(!kbUp || wide) && (
+                  <Pressable
+                    style={[s.cbtn, autoSpeak && { borderColor: C.accent }]}
+                    onPress={speakLatest} onLongPress={toggleAutoSpeak}>
+                    <Text style={s.klabel}>{speaking ? '⏹' : '🔊'}</Text>
+                  </Pressable>
+                )}
                 <TextInput
                   style={[s.chatInput,
                     { height: Math.min(120, Math.max(44, composerH + 24)) }]}

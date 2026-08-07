@@ -35,7 +35,8 @@
         {
           "photosPermission": "Attach screenshots from your library to send to Claude."
         }
-      ]
+      ],
+      "expo-audio"
     ],
     "experiments": {
       "typedRoutes": true
