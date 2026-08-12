@@ -376,11 +376,22 @@ def ensure_overview():
         reg = load_registry()
     except Exception:
         return
-    ov_dir = os.path.expanduser("~/overview")
+    # The overview agent must live in the same user's world as the claude
+    # sessions it reads. On boxes where the dashboard runs as root but claude
+    # runs as a user (beelink, the Pis), HUB_CLAUDE_PROJECTS points at that
+    # user's ~/.claude/projects — derive the home from it, not from our own
+    # uid, and hand the dir to that user so gen_claude_md can write the brief.
+    home = os.path.dirname(os.path.dirname(os.path.normpath(CLAUDE_PROJECTS)))
+    ov_dir = os.path.join(home, "overview")
     try:
         os.makedirs(ov_dir, exist_ok=True)
     except OSError:
         return
+    try:
+        st = os.stat(CLAUDE_PROJECTS)
+        os.chown(ov_dir, st.st_uid, st.st_gid)
+    except OSError:
+        pass
     if any(p.get("id") == "overview" for p in reg.get("projects", [])):
         return
     reg.setdefault("projects", []).insert(0, {
