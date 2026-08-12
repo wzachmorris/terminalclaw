@@ -977,6 +977,20 @@ def claude_transcript(project, since):
             continue
     if start == 0:
         msgs = msgs[-200:]
+    # TUI-only interactivity (permission menus, login codes) is drawn on
+    # screen but never written to the transcript — peek at the live pane so
+    # chat mode can banner it. Always set (never folded from entries) so the
+    # client's merge clears it the moment the prompt is answered. The ❯ N.
+    # caret-menu pattern is distinctive to Claude Code's option prompts.
+    status["awaitingInput"] = False
+    try:
+        pane = subprocess.run(
+            ["tmux", "capture-pane", "-p", "-t", "hub-" + proj["id"]],
+            capture_output=True, text=True, timeout=5).stdout
+        status["awaitingInput"] = bool(
+            re.search(r"❯\s*\d+\.", pane) or "Paste code here" in pane)
+    except Exception:
+        pass
     return {"session": sid, "offset": end, "reset": reset, "messages": msgs,
             "status": status}
 

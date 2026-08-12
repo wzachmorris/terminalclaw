@@ -700,6 +700,84 @@ export default function Workspace() {
       </Pressable>
     </View>
   ) : null;
+  // terminal-mode button bar, hoisted for the same reason: phones peg it
+  // under the project chips — sideways-sliding a bar at the very bottom
+  // fights the iOS home-indicator gesture; wide screens keep it at the
+  // bottom, where a mouse doesn't care.
+  const termBarEl = !chatActive ? (
+    <ScrollView
+      horizontal keyboardShouldPersistTaps="always"
+      showsHorizontalScrollIndicator={false}
+      style={[s.bar, !wide && s.barTop]} contentContainerStyle={s.barInner}
+    >
+      {/* terminal mode is just a terminal now — chat owns reading,
+          copying and composing. Slim bar: back to chat, the ⌨ key
+          drawer, scrollback, engine toggles. Everything else folds
+          into ⌨. */}
+      <Pressable style={[s.kbtn, s.kwide]} onPress={toggleChat}>
+        <Text style={s.klabel}>💬 Chat</Text>
+      </Pressable>
+      <Pressable style={[s.kbtn, keysOpen && { borderColor: C.accent }]}
+        onPress={() => setKeysOpen(!keysOpen)}>
+        <Text style={[s.klabel, keysOpen && { color: C.accent }]}>⌨</Text>
+      </Pressable>
+      {/* ↻ force a fresh terminal attach — for when a tab comes up
+          showing the wrong project's session */}
+      <Pressable style={s.kbtn}
+        onPress={() => { setStatus('connecting'); setWebNonce((n) => n + 1); }}>
+        <Text style={s.klabel}>↻</Text>
+      </Pressable>
+      {/* 📜 tmux mouse mode only matters where real wheel events exist
+          (trackpad/mouse). On phones a swipe becomes a tmux drag, not a
+          scroll — the toggle is invisible there, so don't show it. */}
+      {wide && (
+        <Pressable
+          style={[s.kbtn, mouseOn && { borderColor: C.accent }]}
+          onPress={toggleMouse}>
+          <Text style={[s.klabel, mouseOn && { color: C.accent }]}>📜</Text>
+        </Pressable>
+      )}
+      {keysOpen && (
+        <>
+          <View style={s.sep} />
+          <Pressable style={s.kbtn}
+            onPress={() => { setDictText(''); setDictating(true); }}>
+            <Text style={s.klabel}>🎤</Text>
+          </Pressable>
+          <Pressable style={s.kbtn} onPress={paste}>
+            <Text style={s.klabel}>📋</Text>
+          </Pressable>
+          <Pressable style={s.kbtn} onPress={copyOut}>
+            <Text style={s.klabel}>{copied ? '✓' : '📄'}</Text>
+          </Pressable>
+          {KEYS.map((k) => (
+            <Pressable key={k.key} style={[s.kbtn, k.wide && s.kwide]}
+              onPress={() => sendKey(k.key)}>
+              <Text style={s.klabel}>{k.label}</Text>
+            </Pressable>
+          ))}
+          {/* dismisses the phone's on-screen keyboard — pointless with
+              a hardware keyboard, so wide screens don't get it */}
+          {!wide && (
+            <Pressable style={[s.kbtn, s.kwide]}
+              onPress={() => js('TC.blurKeyboard()')}>
+              <Text style={s.klabel}>⌨ Hide</Text>
+            </Pressable>
+          )}
+        </>
+      )}
+    </ScrollView>
+  ) : null;
+  // TUI-only prompts (permission menus, login codes) never reach the
+  // transcript — when the server spots one on the live pane, banner it
+  // here; tapping flips to the terminal to answer.
+  const promptBanner = chatActive && chatStatus.awaitingInput ? (
+    <Pressable onPress={toggleChat}>
+      <Text style={s.promptBanner} numberOfLines={1}>
+        ⚠ Claude is asking something in the terminal — tap to answer
+      </Text>
+    </Pressable>
+  ) : null;
 
   return (
     <SafeAreaView style={s.root} edges={['top', 'left', 'right']}>
@@ -783,10 +861,13 @@ export default function Workspace() {
                 </Pressable>
               </ScrollView>
             )}
-            {/* phones: composer rides just under the tabs — top of screen,
-                where your eyes and thumb already are */}
+            {/* phones: composer (chat) or button bar (terminal) rides just
+                under the tabs — top of screen, where your eyes and thumb
+                already are */}
             {!wide && chatBarEl}
+            {!wide && promptBanner}
             {!wide && chatStatusEl}
+            {!wide && termBarEl}
             {box && project && chatActive ? (
               /* 💬 chat — inverted virtualized list: opens at the newest
                  message and stays pinned there while output streams; scroll
@@ -884,72 +965,10 @@ export default function Workspace() {
                 </Text>
               </View>
             )}
+            {wide && promptBanner}
             {wide && chatStatusEl}
             {wide && chatBarEl}
-            {!chatActive && (
-            <ScrollView
-              horizontal keyboardShouldPersistTaps="always"
-              showsHorizontalScrollIndicator={false}
-              style={s.bar} contentContainerStyle={s.barInner}
-            >
-              {/* terminal mode is just a terminal now — chat owns reading,
-                  copying and composing. Slim bar: back to chat, the ⌨ key
-                  drawer, scrollback, engine toggles. Everything else folds
-                  into ⌨. */}
-              <Pressable style={[s.kbtn, s.kwide]} onPress={toggleChat}>
-                <Text style={s.klabel}>💬 Chat</Text>
-              </Pressable>
-              <Pressable style={[s.kbtn, keysOpen && { borderColor: C.accent }]}
-                onPress={() => setKeysOpen(!keysOpen)}>
-                <Text style={[s.klabel, keysOpen && { color: C.accent }]}>⌨</Text>
-              </Pressable>
-              {/* ↻ force a fresh terminal attach — for when a tab comes up
-                  showing the wrong project's session */}
-              <Pressable style={s.kbtn}
-                onPress={() => { setStatus('connecting'); setWebNonce((n) => n + 1); }}>
-                <Text style={s.klabel}>↻</Text>
-              </Pressable>
-              {/* 📜 tmux mouse mode only matters where real wheel events exist
-                  (trackpad/mouse). On phones a swipe becomes a tmux drag, not a
-                  scroll — the toggle is invisible there, so don't show it. */}
-              {wide && (
-                <Pressable
-                  style={[s.kbtn, mouseOn && { borderColor: C.accent }]}
-                  onPress={toggleMouse}>
-                  <Text style={[s.klabel, mouseOn && { color: C.accent }]}>📜</Text>
-                </Pressable>
-              )}
-              {keysOpen && (
-                <>
-                  <View style={s.sep} />
-                  <Pressable style={s.kbtn}
-                    onPress={() => { setDictText(''); setDictating(true); }}>
-                    <Text style={s.klabel}>🎤</Text>
-                  </Pressable>
-                  <Pressable style={s.kbtn} onPress={paste}>
-                    <Text style={s.klabel}>📋</Text>
-                  </Pressable>
-                  <Pressable style={s.kbtn} onPress={copyOut}>
-                    <Text style={s.klabel}>{copied ? '✓' : '📄'}</Text>
-                  </Pressable>
-                  {KEYS.map((k) => (
-                    <Pressable key={k.key} style={[s.kbtn, k.wide && s.kwide]}
-                      onPress={() => sendKey(k.key)}>
-                      <Text style={s.klabel}>{k.label}</Text>
-                    </Pressable>
-                  ))}
-                  {/* dismisses the phone's on-screen keyboard — pointless with
-                      a hardware keyboard, so wide screens don't get it */}
-                  {!wide && (
-                    <Pressable style={[s.kbtn, s.kwide]}
-                      onPress={() => js('TC.blurKeyboard()')}>
-                      <Text style={s.klabel}>⌨ Hide</Text>
-                    </Pressable>
-                  )}
-                </>
-              )}
-            </ScrollView>
-            )}
+            {wide && termBarEl}
           </DropWrap>
         </View>
       </KeyboardAvoidingView>
@@ -1101,6 +1120,14 @@ const s = StyleSheet.create({
   },
   chatBarTop: {
     borderTopWidth: 0, borderBottomWidth: 1, borderBottomColor: C.border,
+  },
+  barTop: {
+    borderTopWidth: 0, borderBottomWidth: 1, borderBottomColor: C.border,
+  },
+  promptBanner: {
+    color: C.amber, fontSize: 12, fontWeight: '600',
+    paddingHorizontal: 14, paddingVertical: 5, backgroundColor: C.panel,
+    borderTopWidth: StyleSheet.hairlineWidth, borderTopColor: C.border,
   },
   chatBar: {
     flexDirection: 'row', alignItems: 'flex-end', gap: 6,

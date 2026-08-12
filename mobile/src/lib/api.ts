@@ -133,7 +133,12 @@ export async function termKey(box: Box, project: string, key: string) {
 export type ChatMsg = { role: string; text: string; ts: string };
 // status: last-known permission mode + context size; an incremental pull with
 // no news sends {} and the client keeps its previous values
-export type ChatStatus = { permissionMode?: string; contextTokens?: number };
+export type ChatStatus = {
+  permissionMode?: string; contextTokens?: number;
+  // the live pane is showing TUI-only interactivity (permission menu, login
+  // code) that never reaches the transcript — chat mode banners it
+  awaitingInput?: boolean;
+};
 export async function claudeTranscript(box: Box, project: string, since: string):
     Promise<{ session: string | null; offset: number; reset: boolean; messages: ChatMsg[];
       status?: ChatStatus }> {
