@@ -607,6 +607,100 @@ export default function Workspace() {
   const dropProps = chatActive && TCDropZone
     ? { onDrop: (e: DropEvent) => void handleDrop(e) } : {};
 
+  // composer + session-status strip, hoisted so each layout can place them:
+  // phones peg both directly under the project chips (the screen bottom is a
+  // reach, and the keyboard half-covers it); wide screens keep the
+  // messaging-app bottom bar.
+  const chatStatusEl = chatActive
+    && (chatStatus.permissionMode || chatStatus.contextTokens) ? (
+      /* the TUI footer's session status: permission mode + how much
+         context /clear would free (typing /clear in the composer
+         actually runs it) */
+      <Text style={[s.chatStatus, !wide && s.chatStatusTop]} numberOfLines={1}>
+        {[
+          modeLabel(chatStatus.permissionMode),
+          chatStatus.contextTokens
+            ? `/clear to save ${fmtTokens(chatStatus.contextTokens)} tokens`
+            : '',
+        ].filter(Boolean).join(' · ')}
+      </Text>
+    ) : null;
+  const chatBarEl = chatActive ? (
+    /* the input IS the bar — a messaging-app composer. On phones the
+       keyboard mic dictates straight into it; on hardware keyboards (Mac)
+       ⏎ submits directly. 🖥 flips to terminal, 📎 attaches a screenshot,
+       🔊 speaks the latest reply, 📄 (wide) copies it, Esc interrupts
+       Claude. More old-bar buttons return here only as they prove needed. */
+    <View style={[s.chatBar, !wide && s.chatBarTop]}>
+      {/* while typing, the mode toggle yields its slot to ⌄
+          (collapse keyboard) — you don't flip views mid-message,
+          but you do want your reading space back */}
+      {kbUp ? (
+        <Pressable style={s.cbtn} onPress={() => Keyboard.dismiss()}>
+          <Text style={[s.klabel, { fontWeight: '700' }]}>⌄</Text>
+        </Pressable>
+      ) : (
+        <Pressable style={s.cbtn} onPress={toggleChat}>
+          <Text style={s.klabel}>🖥</Text>
+        </Pressable>
+      )}
+      <Pressable style={s.cbtn} onPress={attach} disabled={attaching}>
+        <Text style={s.klabel}>{attaching ? '⏳' : '📎'}</Text>
+      </Pressable>
+      {/* Aa: cycle chat text size (4 steps, wraps) */}
+      <Pressable style={s.cbtn} onPress={cycleChatSize}>
+        <Text style={s.klabel}>Aa</Text>
+      </Pressable>
+      {/* 🔊 speak the latest reply (tap again stops); long-press
+          arms auto-speak — accent border = on. Yields its slot to
+          the input while typing on phones. */}
+      {(!kbUp || wide) && (
+        <Pressable
+          style={[s.cbtn, autoSpeak && { borderColor: C.accent }]}
+          onPress={speakLatest} onLongPress={toggleAutoSpeak}>
+          <Text style={s.klabel}>{speaking ? '⏹' : '🔊'}</Text>
+        </Pressable>
+      )}
+      <TextInput
+        style={[s.chatInput,
+          { height: Math.min(120, Math.max(44, composerH + 24)) }]}
+        multiline
+        onContentSizeChange={(e) =>
+          setComposerH(e.nativeEvent.contentSize.height)}
+        placeholder={wide ? 'Message — ⏎ sends' : 'Message (🎤 to dictate)'}
+        placeholderTextColor={C.muted}
+        value={dictText}
+        /* wide = hardware keyboard: a bare ⏎ sends instead of adding
+           a newline (the guard swallows the '\n' that follows the
+           keypress; a multiline paste never matches key 'Enter') */
+        onKeyPress={wide ? (e) => {
+          if (e.nativeEvent.key === 'Enter') {
+            swallowNewline.current = true;
+            composerSubmit();
+          }
+        } : undefined}
+        onChangeText={(t) => {
+          if (swallowNewline.current) {
+            swallowNewline.current = false;
+            return;
+          }
+          setDictText(t);
+        }}
+      />
+      {wide && (
+        <Pressable style={s.cbtn} onPress={copyOut}>
+          <Text style={s.klabel}>{copied ? '✓' : '📄'}</Text>
+        </Pressable>
+      )}
+      <Pressable style={s.cbtn} onPress={() => sendKey('esc')}>
+        <Text style={s.klabel}>Esc</Text>
+      </Pressable>
+      <Pressable style={[s.cbtn, s.cSend]} onPress={composerSubmit}>
+        <Text style={{ color: C.bg, fontWeight: '700' }}>⏎</Text>
+      </Pressable>
+    </View>
+  ) : null;
+
   return (
     <SafeAreaView style={s.root} edges={['top', 'left', 'right']}>
       <Stack.Screen options={{ headerShown: false }} />
@@ -689,6 +783,10 @@ export default function Workspace() {
                 </Pressable>
               </ScrollView>
             )}
+            {/* phones: composer rides just under the tabs — top of screen,
+                where your eyes and thumb already are */}
+            {!wide && chatBarEl}
+            {!wide && chatStatusEl}
             {box && project && chatActive ? (
               /* 💬 chat — inverted virtualized list: opens at the newest
                  message and stays pinned there while output streams; scroll
@@ -786,96 +884,9 @@ export default function Workspace() {
                 </Text>
               </View>
             )}
-            {chatActive && (chatStatus.permissionMode || chatStatus.contextTokens) ? (
-              /* the TUI footer's session status: permission mode + how much
-                 context /clear would free (typing /clear in the composer
-                 actually runs it) */
-              <Text style={s.chatStatus} numberOfLines={1}>
-                {[
-                  modeLabel(chatStatus.permissionMode),
-                  chatStatus.contextTokens
-                    ? `/clear to save ${fmtTokens(chatStatus.contextTokens)} tokens`
-                    : '',
-                ].filter(Boolean).join(' · ')}
-              </Text>
-            ) : null}
-            {chatActive ? (
-              /* chat (all widths): the input IS the bar — a messaging-app
-                 composer. On phones the keyboard mic dictates straight into
-                 it; on hardware keyboards (Mac) ⏎ submits directly. 🖥 flips
-                 to terminal, 📎 attaches a
-                 screenshot, 📄 (wide) copies the latest response, Esc
-                 interrupts Claude. More old-bar buttons return here only as
-                 they prove needed. */
-              <View style={s.chatBar}>
-                {/* while typing, the mode toggle yields its slot to ⌄
-                    (collapse keyboard) — you don't flip views mid-message,
-                    but you do want your reading space back */}
-                {kbUp ? (
-                  <Pressable style={s.cbtn} onPress={() => Keyboard.dismiss()}>
-                    <Text style={[s.klabel, { fontWeight: '700' }]}>⌄</Text>
-                  </Pressable>
-                ) : (
-                  <Pressable style={s.cbtn} onPress={toggleChat}>
-                    <Text style={s.klabel}>🖥</Text>
-                  </Pressable>
-                )}
-                <Pressable style={s.cbtn} onPress={attach} disabled={attaching}>
-                  <Text style={s.klabel}>{attaching ? '⏳' : '📎'}</Text>
-                </Pressable>
-                {/* Aa: cycle chat text size (4 steps, wraps) */}
-                <Pressable style={s.cbtn} onPress={cycleChatSize}>
-                  <Text style={s.klabel}>Aa</Text>
-                </Pressable>
-                {/* 🔊 speak the latest reply (tap again stops); long-press
-                    arms auto-speak — accent border = on. Yields its slot to
-                    the input while typing on phones. */}
-                {(!kbUp || wide) && (
-                  <Pressable
-                    style={[s.cbtn, autoSpeak && { borderColor: C.accent }]}
-                    onPress={speakLatest} onLongPress={toggleAutoSpeak}>
-                    <Text style={s.klabel}>{speaking ? '⏹' : '🔊'}</Text>
-                  </Pressable>
-                )}
-                <TextInput
-                  style={[s.chatInput,
-                    { height: Math.min(120, Math.max(44, composerH + 24)) }]}
-                  multiline
-                  onContentSizeChange={(e) =>
-                    setComposerH(e.nativeEvent.contentSize.height)}
-                  placeholder={wide ? 'Message — ⏎ sends' : 'Message (🎤 to dictate)'}
-                  placeholderTextColor={C.muted}
-                  value={dictText}
-                  /* wide = hardware keyboard: a bare ⏎ sends instead of adding
-                     a newline (the guard swallows the '\n' that follows the
-                     keypress; a multiline paste never matches key 'Enter') */
-                  onKeyPress={wide ? (e) => {
-                    if (e.nativeEvent.key === 'Enter') {
-                      swallowNewline.current = true;
-                      composerSubmit();
-                    }
-                  } : undefined}
-                  onChangeText={(t) => {
-                    if (swallowNewline.current) {
-                      swallowNewline.current = false;
-                      return;
-                    }
-                    setDictText(t);
-                  }}
-                />
-                {wide && (
-                  <Pressable style={s.cbtn} onPress={copyOut}>
-                    <Text style={s.klabel}>{copied ? '✓' : '📄'}</Text>
-                  </Pressable>
-                )}
-                <Pressable style={s.cbtn} onPress={() => sendKey('esc')}>
-                  <Text style={s.klabel}>Esc</Text>
-                </Pressable>
-                <Pressable style={[s.cbtn, s.cSend]} onPress={composerSubmit}>
-                  <Text style={{ color: C.bg, fontWeight: '700' }}>⏎</Text>
-                </Pressable>
-              </View>
-            ) : (
+            {wide && chatStatusEl}
+            {wide && chatBarEl}
+            {!chatActive && (
             <ScrollView
               horizontal keyboardShouldPersistTaps="always"
               showsHorizontalScrollIndicator={false}
@@ -1082,6 +1093,14 @@ const s = StyleSheet.create({
   chatStatus: {
     color: C.muted, fontSize: 11, paddingHorizontal: 14, paddingVertical: 3,
     borderTopWidth: StyleSheet.hairlineWidth, borderTopColor: C.border,
+  },
+  // top-of-screen variants (phones): borders flip to the underside
+  chatStatusTop: {
+    borderTopWidth: 0,
+    borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: C.border,
+  },
+  chatBarTop: {
+    borderTopWidth: 0, borderBottomWidth: 1, borderBottomColor: C.border,
   },
   chatBar: {
     flexDirection: 'row', alignItems: 'flex-end', gap: 6,

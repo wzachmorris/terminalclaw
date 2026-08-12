@@ -364,6 +364,38 @@ def write_registry(reg):
     return reg
 
 
+def ensure_overview():
+    """Bake the 📋 Overview briefing tab into this box at startup.
+
+    Every box gets an 'overview' project whose agent (brief + tabs.py helper,
+    shipped in this repo's overview/) summarizes the other tabs' Claude
+    conversations. Idempotent: if the id exists the registry is untouched, so
+    per-box customizations survive — but a deleted tab does come back on the
+    next restart (it's baked in, not an add-on)."""
+    try:
+        reg = load_registry()
+    except Exception:
+        return
+    ov_dir = os.path.expanduser("~/overview")
+    try:
+        os.makedirs(ov_dir, exist_ok=True)
+    except OSError:
+        return
+    if any(p.get("id") == "overview" for p in reg.get("projects", [])):
+        return
+    reg.setdefault("projects", []).insert(0, {
+        "id": "overview",
+        "name": "📋 Overview",
+        "dir": ov_dir,
+        "domains": [],
+        "containers": [],
+        "memory": ["overview-briefing-agent.md"],
+        "memory_dirs": [os.path.join(HERE, "overview")],
+        "color": "#bc8cff",
+    })
+    write_registry(reg)
+
+
 def add_project(name, directory, create=False):
     """Append a new project (name + directory) to the registry.
 
@@ -1551,6 +1583,7 @@ class Handler(BaseHTTPRequestHandler):
 
 
 if __name__ == "__main__":
+    ensure_overview()
     srv = ThreadingHTTPServer((HOST, PORT), Handler)
     print(f"hub-dashboard listening on http://{HOST}:{PORT}")
     srv.serve_forever()
