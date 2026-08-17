@@ -917,6 +917,36 @@ def _transcript_status(st, e):
             st["contextTokens"] = ctx
 
 
+# Written by hooks/tab-session-map.py (a Claude Code SessionStart hook):
+# one <tab>.json per hub-* tmux tab, naming that tab's exact transcript file.
+TAB_SESSIONS = os.path.expanduser("~/.cache/terminalclaw/tab-sessions")
+
+
+def _tab_session_file(tab_id):
+    """The transcript file the SessionStart hook recorded for this tab.
+
+    Projects that share a working directory share one transcript folder, so
+    the newest-by-mtime guess below can surface a sibling project's
+    conversation. The hook map is exact. Returns the path, "" when the
+    mapped session has no transcript file yet (brand-new/cleared chat —
+    show empty rather than guessing wrong), or None when the tab has no
+    map entry (claude started before the hook existed) — caller falls back
+    to the mtime guess.
+    """
+    try:
+        with open(os.path.join(TAB_SESSIONS, "hub-" + tab_id + ".json")) as fh:
+            m = json.load(fh)
+    except (OSError, ValueError):
+        return None
+    path = m.get("transcript_path") or ""
+    if not path:
+        return None
+    real = os.path.realpath(path)
+    if not real.startswith(os.path.realpath(CLAUDE_PROJECTS) + os.sep):
+        return None
+    return path if os.path.isfile(path) else ""
+
+
 def claude_transcript(project, since):
     """Live view of a project's Claude conversation, read from the transcript
     Claude Code already writes (~/.claude/projects/<slug>/<session>.jsonl) —
@@ -934,16 +964,22 @@ def claude_transcript(project, since):
         # command tabs (ssh boxes etc.) don't run claude here — their dir
         # would misleadingly match another project's transcript
         return {"session": None, "offset": 0, "reset": False, "messages": []}
-    slug = re.sub(r"[^A-Za-z0-9]", "-", os.path.normpath(proj.get("dir") or ""))
-    pdir = os.path.join(CLAUDE_PROJECTS, slug)
-    try:
-        files = [os.path.join(pdir, f) for f in os.listdir(pdir)
-                 if f.endswith(".jsonl")]
-    except OSError:
-        files = []
-    if not files:
+    newest = _tab_session_file(proj["id"])
+    if newest == "":
         return {"session": None, "offset": 0, "reset": False, "messages": []}
-    newest = max(files, key=os.path.getmtime)
+    if newest is None:
+        slug = re.sub(r"[^A-Za-z0-9]", "-",
+                      os.path.normpath(proj.get("dir") or ""))
+        pdir = os.path.join(CLAUDE_PROJECTS, slug)
+        try:
+            files = [os.path.join(pdir, f) for f in os.listdir(pdir)
+                     if f.endswith(".jsonl")]
+        except OSError:
+            files = []
+        if not files:
+            return {"session": None, "offset": 0, "reset": False,
+                    "messages": []}
+        newest = max(files, key=os.path.getmtime)
     sid = os.path.basename(newest)[:-len(".jsonl")]
     size = os.path.getsize(newest)
     start, reset = 0, False
