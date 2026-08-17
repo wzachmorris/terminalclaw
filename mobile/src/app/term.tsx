@@ -19,8 +19,8 @@ import * as SecureStore from 'expo-secure-store';
 import * as Speech from 'expo-speech';
 import { setAudioModeAsync } from 'expo-audio';
 import {
-  ApiError, ChatMsg as ChatMsgT, ChatStatus as ChatStatusT, claudeTranscript,
-  createProject, deleteProject,
+  ApiError, browseDir, BrowseEntry, ChatMsg as ChatMsgT, ChatStatus as ChatStatusT,
+  claudeTranscript, createProject, deleteProject,
   getProjects, moveProject, Project, setProjectHidden, termBuffer, termCapture,
   termKey, termMouse, termPaste, termUrl, uploadFile,
 } from '@/lib/api';
@@ -52,6 +52,7 @@ export default function Workspace() {
   const [boxes, setBoxes] = useState<Box[]>([]);
   const [boxId, setBoxId] = useState<string | undefined>(params.box);
   const [projects, setProjects] = useState<Project[]>([]);
+  const [projectsRoot, setProjectsRoot] = useState('');
   const [projectId, setProjectId] = useState<string | undefined>(params.project);
   const [status, setStatus] = useState<'connecting' | 'up' | 'down'>('connecting');
   const [showHidden, setShowHidden] = useState(false);
@@ -158,6 +159,7 @@ export default function Workspace() {
     return getProjects(box).then((d) => {
       projCache.current[bid] = d.projects;
       setProjects(d.projects);
+      setProjectsRoot(d.projects_root ?? '');
       setProjectId((cur) => {
         if (cur && d.projects.some((p) => p.id === cur)) return cur;
         const remembered = lastByBox.current[bid];
@@ -498,13 +500,31 @@ export default function Workspace() {
   const [addingTab, setAddingTab] = useState(false);
   const [newName, setNewName] = useState('');
   const [newDir, setNewDir] = useState('');
+  // folder picker inside the new-tab modal — server-side listing via
+  // /api/browse (the phone can't see the box's filesystem any other way)
+  const [browse, setBrowse] = useState<
+    { dir: string; parent: string; entries: BrowseEntry[] } | null>(null);
+  const openAddTab = () => {
+    setNewDir((d) => d || (projectsRoot ? projectsRoot + '/' : ''));
+    setBrowse(null);
+    setAddingTab(true);
+  };
+  const closeAddTab = () => { setAddingTab(false); setBrowse(null); };
+  const openBrowse = async (dir?: string) => {
+    if (!box) return;
+    // start from what's typed (minus any trailing slash / unfinished name the
+    // server would reject) — the server falls back to $HOME if it's not a dir
+    const start = dir ?? (newDir.trim().replace(/\/+$/, '') || projectsRoot || '/home');
+    try { setBrowse(await browseDir(box, start)); }
+    catch { /* box unreachable — the Add path still works by typing */ }
+  };
   const submitNewTab = async (create: boolean) => {
     if (!box) return;
     const name = newName.trim(), dir = newDir.trim();
     if (!name || !dir) return;
     try {
       const r = await createProject(box, name, dir, create);
-      setAddingTab(false);
+      closeAddTab();
       setNewName('');
       setNewDir('');
       await loadProjects();
@@ -827,7 +847,7 @@ export default function Workspace() {
                   </Pressable>
                 )}
                 {showHidden && hidden.map((p) => projectRow(p, false))}
-                <Pressable style={s.hiddenHdr} onPress={() => setAddingTab(true)}>
+                <Pressable style={s.hiddenHdr} onPress={() => openAddTab()}>
                   <Text style={s.hiddenHdrTxt}>＋ New tab</Text>
                 </Pressable>
               </ScrollView>
@@ -856,7 +876,7 @@ export default function Workspace() {
                 )}
                 {showHidden && hidden.map((p) => projectRow(p, true))}
                 <Pressable style={[s.pchip, { borderLeftColor: 'transparent' }]}
-                  onPress={() => setAddingTab(true)}>
+                  onPress={() => openAddTab()}>
                   <Text style={s.pname}>＋</Text>
                 </Pressable>
               </ScrollView>
@@ -973,9 +993,12 @@ export default function Workspace() {
         </View>
       </KeyboardAvoidingView>
 
-      {/* ＋ new tab — name + directory (server expands ~) */}
+      {/* ＋ new tab — name + directory (server expands ~). 📁 opens a
+          server-side folder browser (/api/browse): tap to descend, ⬆︎ to go
+          up, "Use" drops the current folder into the directory field — type
+          a new subfolder name after it and Add offers to create it. */}
       <Modal visible={addingTab} transparent animationType="fade"
-        onRequestClose={() => setAddingTab(false)}>
+        onRequestClose={closeAddTab}>
         <KeyboardAvoidingView
           behavior={Platform.OS === 'ios' ? 'padding' : undefined}
           style={s.dictWrap}
@@ -987,15 +1010,54 @@ export default function Workspace() {
               placeholder="Name" placeholderTextColor={C.muted}
               value={newName} onChangeText={setNewName}
             />
-            <TextInput
-              style={s.addInput}
-              autoCapitalize="none" autoCorrect={false}
-              placeholder="Directory (e.g. ~/projects/foo)"
-              placeholderTextColor={C.muted}
-              value={newDir} onChangeText={setNewDir}
-            />
+            <View style={{ flexDirection: 'row', gap: 8 }}>
+              <TextInput
+                style={[s.addInput, { flex: 1 }]}
+                autoCapitalize="none" autoCorrect={false}
+                placeholder="Directory (e.g. ~/projects/foo)"
+                placeholderTextColor={C.muted}
+                value={newDir} onChangeText={setNewDir}
+              />
+              <Pressable style={s.kbtn}
+                onPress={() => { browse ? setBrowse(null) : void openBrowse(); }}>
+                <Text style={s.klabel}>📁</Text>
+              </Pressable>
+            </View>
+            {browse && (
+              <View style={s.browseBox}>
+                <View style={s.browseHdr}>
+                  <Text style={s.browsePath} numberOfLines={1}>{browse.dir}</Text>
+                  <Pressable style={s.browseUse}
+                    onPress={() => { setNewDir(browse.dir); setBrowse(null); }}>
+                    <Text style={{ color: C.bg, fontWeight: '600', fontSize: 13 }}>Use</Text>
+                  </Pressable>
+                </View>
+                <ScrollView style={{ maxHeight: 250 }}
+                  keyboardShouldPersistTaps="handled">
+                  {browse.dir !== '/' && (
+                    <Pressable style={s.browseRow}
+                      onPress={() => void openBrowse(browse.parent)}>
+                      <Text style={s.browseName}>⬆︎  ..</Text>
+                    </Pressable>
+                  )}
+                  {browse.entries
+                    .filter((e) => e.is_dir && !e.name.startsWith('.'))
+                    .map((e) => (
+                      <Pressable key={e.path} style={s.browseRow}
+                        onPress={() => void openBrowse(e.path)}>
+                        <Text style={s.browseName} numberOfLines={1}>📁 {e.name}</Text>
+                      </Pressable>
+                    ))}
+                  {!browse.entries.some((e) => e.is_dir && !e.name.startsWith('.')) && (
+                    <Text style={[s.browseName, { color: C.muted, padding: 10 }]}>
+                      no subfolders — Use this one or type a new name after it
+                    </Text>
+                  )}
+                </ScrollView>
+              </View>
+            )}
             <View style={s.dictBtns}>
-              <Pressable style={s.kbtn} onPress={() => setAddingTab(false)}>
+              <Pressable style={s.kbtn} onPress={closeAddTab}>
                 <Text style={{ color: C.muted }}>Cancel</Text>
               </Pressable>
               <Pressable style={[s.kbtn, s.kwide, { backgroundColor: C.accent }]}
@@ -1174,6 +1236,26 @@ const s = StyleSheet.create({
     backgroundColor: C.bg, borderColor: C.border, borderWidth: 1,
     borderRadius: 8, color: C.text, padding: 11, fontSize: 16,
   },
+  browseBox: {
+    backgroundColor: C.bg, borderColor: C.border, borderWidth: 1,
+    borderRadius: 8, overflow: 'hidden',
+  },
+  browseHdr: {
+    flexDirection: 'row', alignItems: 'center', gap: 8,
+    paddingHorizontal: 10, paddingVertical: 8,
+    borderBottomWidth: 1, borderBottomColor: C.border,
+    backgroundColor: C.panel2,
+  },
+  browsePath: { flex: 1, color: C.muted, fontSize: 13 },
+  browseUse: {
+    backgroundColor: C.accent, borderRadius: 6,
+    paddingHorizontal: 12, paddingVertical: 5,
+  },
+  browseRow: {
+    paddingHorizontal: 10, paddingVertical: 9,
+    borderBottomWidth: 1, borderBottomColor: C.border,
+  },
+  browseName: { color: C.text, fontSize: 15 },
   histText: {
     color: C.text, fontSize: 12,
     fontFamily: Platform.OS === 'ios' ? 'Menlo' : 'monospace',

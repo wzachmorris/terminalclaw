@@ -38,8 +38,18 @@ export type Project = {
 };
 
 export async function getProjects(box: Box):
-    Promise<{ title: string; projects: Project[] }> {
+    Promise<{ title: string; projects: Project[]; projects_root?: string }> {
   return req(`${box.url}/api/projects`, {
+    headers: { 'X-TC-Token': box.token },
+  });
+}
+
+// GET /api/browse — server-side directory listing for the new-tab folder
+// picker. Falls back to the server's $HOME when dir is blank or missing.
+export type BrowseEntry = { name: string; path: string; is_dir: boolean };
+export async function browseDir(box: Box, dir: string):
+    Promise<{ dir: string; parent: string; entries: BrowseEntry[] }> {
+  return req(`${box.url}/api/browse?dir=${encodeURIComponent(dir)}`, {
     headers: { 'X-TC-Token': box.token },
   });
 }
