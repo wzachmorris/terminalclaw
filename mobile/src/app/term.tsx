@@ -157,6 +157,7 @@ export default function Workspace() {
     if (!box) return Promise.resolve();
     const bid = box.id;
     return getProjects(box).then((d) => {
+      if (!Array.isArray(d.projects)) return;   // gate page / odd server reply
       projCache.current[bid] = d.projects;
       setProjects(d.projects);
       setProjectsRoot(d.projects_root ?? '');

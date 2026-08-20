@@ -12,8 +12,15 @@ async function req(url: string, init?: RequestInit): Promise<any> {
   } catch {
     throw new ApiError(0, 'unreachable');
   }
-  const body = await r.json().catch(() => ({}));
-  if (!r.ok) throw new ApiError(r.status, body.error || `HTTP ${r.status}`, body);
+  const body = await r.json().catch(() => null);
+  if (!r.ok) throw new ApiError(r.status, body?.error || `HTTP ${r.status}`, body ?? {});
+  // The layer-2 gate answers a rejected/expired token with its login page —
+  // HTTP 200, text/html. Swallowing that as {} let undefined fields reach
+  // render code and crash release builds; treat any unparseable 2xx as an
+  // expired session instead.
+  if (body === null || typeof body !== 'object') {
+    throw new ApiError(401, 'session expired', { gate: true });
+  }
   return body;
 }
 
