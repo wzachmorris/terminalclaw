@@ -1101,8 +1101,13 @@ class Handler(BaseHTTPRequestHandler):
     def _authed(self):
         """True iff the request carries a valid layer-2 session cookie, or a
         valid session token in X-TC-Token (the mobile app's native fetches)."""
-        tok = cookie_value(self.headers, COOKIE) or self.headers.get("X-TC-Token")
-        return bool(tok and token_valid(tok))
+        # Check BOTH credentials: iOS/macOS share the WebView's cookie jar
+        # with the app's fetch(), so a stale hub_session cookie (planted by
+        # an earlier term.html) can ride along next to a fresh X-TC-Token.
+        # "cookie or header" let the dead cookie veto a valid header forever.
+        return any(t and token_valid(t) for t in
+                   (self.headers.get("X-TC-Token"),
+                    cookie_value(self.headers, COOKIE)))
 
     def _read_json(self):
         length = int(self.headers.get("Content-Length", "0") or 0)
@@ -1447,9 +1452,9 @@ class Handler(BaseHTTPRequestHandler):
             qtok = parse_qs(urlparse(fwd).query).get("token", [""])[0]
             if qtok and token_valid(qtok):
                 return self._send(200, "ok", "text/plain")
-            tok = (cookie_value(self.headers, COOKIE)
-                   or self.headers.get("X-TC-Token"))
-            if tok and token_valid(tok):
+            # Either credential may be the live one (see _authed): the app's
+            # fetch can carry a stale WebView cookie beside a fresh header.
+            if self._authed():
                 return self._send(200, "ok", "text/plain")
             return self._redirect("/gate/login")
 
