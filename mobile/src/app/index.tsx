@@ -18,13 +18,24 @@ export default function Machines() {
 
   useFocusEffect(useCallback(() => { void loadBoxes().then(setBoxes); }, []));
 
-  const remove = (b: Box) =>
-    Alert.alert(`Remove ${b.name}?`, 'Only removes it from this app.', [
-      { text: 'Cancel', style: 'cancel' },
+  // Long-press menu. "Log in again" matters even while the card is green:
+  // the server rejects a token the moment it turns 30 days old, hours before
+  // the app's own expiry copy agrees — without this there is no way to
+  // re-authenticate a box the app still believes is fine.
+  const cardMenu = (b: Box) =>
+    Alert.alert(b.name, undefined, [
+      { text: 'Log in again', onPress: () => setEditing(b) },
       {
         text: 'Remove', style: 'destructive',
-        onPress: () => void deleteBox(b.id).then(loadBoxes).then(setBoxes),
+        onPress: () => Alert.alert(`Remove ${b.name}?`, 'Only removes it from this app.', [
+          { text: 'Cancel', style: 'cancel' },
+          {
+            text: 'Remove', style: 'destructive',
+            onPress: () => void deleteBox(b.id).then(loadBoxes).then(setBoxes),
+          },
+        ]),
       },
+      { text: 'Cancel', style: 'cancel' },
     ]);
 
   return (
@@ -48,7 +59,7 @@ export default function Machines() {
               onPress={() => alive
                 ? router.push({ pathname: '/term', params: { box: item.id } })
                 : setEditing(item)}
-              onLongPress={() => remove(item)}
+              onLongPress={() => cardMenu(item)}
             >
               <View style={[s.dot, { backgroundColor: alive ? C.green : C.amber }]} />
               <View style={{ flex: 1 }}>
