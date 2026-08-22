@@ -36,6 +36,16 @@ export async function upsertBox(box: Box) {
   await save(boxes);
 }
 
+// reorder: swap a box with its neighbor (delta ±1); no-op at the ends
+export async function moveBox(id: string, delta: 1 | -1) {
+  const boxes = await loadBoxes();
+  const i = boxes.findIndex((b) => b.id === id);
+  const j = i + delta;
+  if (i < 0 || j < 0 || j >= boxes.length) return;
+  [boxes[i], boxes[j]] = [boxes[j], boxes[i]];
+  await save(boxes);
+}
+
 export async function deleteBox(id: string) {
   await save((await loadBoxes()).filter((b) => b.id !== id));
 }

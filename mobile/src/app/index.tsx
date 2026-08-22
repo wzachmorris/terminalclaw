@@ -8,7 +8,7 @@ import {
 } from 'react-native';
 import { router, Stack, useFocusEffect } from 'expo-router';
 import { login } from '@/lib/api';
-import { Box, deleteBox, loadBoxes, normalizeUrl, tokenAlive, upsertBox } from '@/lib/boxes';
+import { Box, deleteBox, loadBoxes, moveBox, normalizeUrl, tokenAlive, upsertBox } from '@/lib/boxes';
 import { C } from '@/lib/theme';
 
 export default function Machines() {
@@ -22,8 +22,11 @@ export default function Machines() {
   // the server rejects a token the moment it turns 30 days old, hours before
   // the app's own expiry copy agrees — without this there is no way to
   // re-authenticate a box the app still believes is fine.
-  const cardMenu = (b: Box) =>
+  const cardMenu = (b: Box) => {
+    const reload = () => void loadBoxes().then(setBoxes);
     Alert.alert(b.name, undefined, [
+      { text: '↑ Move up', onPress: () => void moveBox(b.id, -1).then(reload) },
+      { text: '↓ Move down', onPress: () => void moveBox(b.id, 1).then(reload) },
       { text: 'Log in again', onPress: () => setEditing(b) },
       {
         text: 'Remove', style: 'destructive',
@@ -37,6 +40,7 @@ export default function Machines() {
       },
       { text: 'Cancel', style: 'cancel' },
     ]);
+  };
 
   return (
     <View style={s.root}>
