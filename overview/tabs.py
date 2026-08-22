@@ -17,7 +17,16 @@ import re
 import sys
 from datetime import datetime, timezone
 
-HUB = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+# In the repo this file lives at <hub>/overview/tabs.py; deployed copies land
+# in ~/overview/, so fall back to known hub locations that hold server.py.
+_candidates = [
+    os.environ.get("HUB_DIR"),
+    os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+    os.path.expanduser("~/terminalclaw"),
+    "/opt/terminalclaw",
+]
+HUB = next(d for d in _candidates
+           if d and os.path.isfile(os.path.join(d, "server.py")))
 sys.path.insert(0, HUB)
 import server  # noqa: E402  (safe: server only listens under __main__)
 
