@@ -25,6 +25,7 @@ import {
   termKey, termMouse, termPaste, termUrl, uploadFile,
 } from '@/lib/api';
 import { Box, loadBoxes, tokenAlive } from '@/lib/boxes';
+import { splitMdTables } from '@/lib/mdtable';
 import { C } from '@/lib/theme';
 import { SelText, selTextAvailable } from '../../modules/tc-seltext';
 import { DropEvent, TCDropZone } from '../../modules/tc-dropzone';
@@ -311,6 +312,7 @@ export default function Workspace() {
     // markdown reads terribly aloud — drop the syntax, keep the words
     const t = raw
       .replace(/```[\s\S]*?```/g, ' code block. ')
+      .replace(/^\s*\|[\s:|-]+\|\s*$/gm, ' ')
       .replace(/`([^`]*)`/g, '$1')
       .replace(/\[([^\]]*)\]\([^)]*\)/g, '$1')
       .replace(/[*_#>|]+/g, ' ')
@@ -917,6 +919,36 @@ export default function Workspace() {
                     : item.text;
                   const dim = item.role === 'tool' || item.role === 'result'
                     || item.role === 'system';
+                  // markdown tables wrap mid-row at phone widths and turn to
+                  // soup — re-pad them into aligned columns and give each its
+                  // own horizontal scroller so rows never wrap
+                  const segs = item.role === 'assistant' && item.text.includes('|')
+                    ? splitMdTables(item.text) : null;
+                  if (segs && segs.some((g) => g.table)) {
+                    return (
+                      <View style={s.chatMsg}>
+                        {segs.map((g, i) => g.table ? (
+                          <ScrollView
+                            key={i} horizontal style={s.tbl}
+                            showsHorizontalScrollIndicator={false}
+                          >
+                            <Text selectable style={[s.histText, { fontSize: chatFs }]}>
+                              {g.text}
+                            </Text>
+                          </ScrollView>
+                        ) : selTextAvailable ? (
+                          <SelText key={i} text={g.text} fontSize={chatFs} color={C.text} />
+                        ) : (
+                          <Text
+                            key={i} selectable
+                            style={[s.histText, { fontSize: chatFs }]}
+                          >
+                            {g.text}
+                          </Text>
+                        ))}
+                      </View>
+                    );
+                  }
                   // native bubble: a real UITextView — drag-handle/mouse
                   // range selection and Cmd-C, which RN <Text> can't do
                   if (selTextAvailable) {
@@ -1170,6 +1202,7 @@ const s = StyleSheet.create({
   reader: { flex: 1, backgroundColor: '#000' },
   chatInner: { padding: 10 },
   chatMsg: { marginVertical: 3 },
+  tbl: { marginVertical: 4 },
   chatUser: { marginTop: 10 },
   chatDim: { color: C.muted, fontSize: 11 },
   chatStatus: {
