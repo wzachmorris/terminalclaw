@@ -3,9 +3,7 @@
 // sidebar on wide screens, a chip strip on phones), terminal filling the
 // rest. Layout mirrors the web dashboard's always-visible sidebar instead of
 // v1's list → list → terminal drill-down.
-import {
-  ElementType, ReactElement, useCallback, useEffect, useMemo, useRef, useState,
-} from 'react';
+import { ElementType, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   Alert, FlatList, Keyboard, KeyboardAvoidingView, Modal, Platform, Pressable,
   ScrollView, StyleSheet, Text, TextInput, useWindowDimensions, View,
@@ -27,6 +25,7 @@ import {
   termKey, termMouse, termPaste, termUrl, uploadFile,
 } from '@/lib/api';
 import { Box, loadBoxes, tokenAlive } from '@/lib/boxes';
+import { splitHtml } from '@/lib/mdhtml';
 import { splitMdTables } from '@/lib/mdtable';
 import { C } from '@/lib/theme';
 import { SelText, selTextAvailable } from '../../modules/tc-seltext';
@@ -50,17 +49,49 @@ const modeLabel = (m?: string) => m === 'auto' ? '▶▶ auto mode'
 const fmtTokens = (t: number) =>
   t >= 1000 ? `${(t / 1000).toFixed(1)}k` : String(t);
 
-// HTML in a reply stays raw tags in the text bubble (right for reading the
-// code) — this finds what could open rendered instead: ```html fences, or a
-// reply that IS a bare HTML document.
-function extractHtmlBlocks(text: string): string[] {
-  const blocks: string[] = [];
-  const re = /```html\s*\n([\s\S]*?)```/gi;
-  for (let m = re.exec(text); m; m = re.exec(text)) {
-    if (m[1].trim()) blocks.push(m[1]);
-  }
-  if (!blocks.length && /^\s*(<!doctype html|<html)/i.test(text)) blocks.push(text);
-  return blocks;
+// html chat segments render here: an embedded WebView sized to its content
+// (capped — ⤢ opens the fullscreen modal for the rest). Bare fragments get
+// wrapped in the app palette so they don't flash a white card; a full
+// document keeps its own styling.
+const HTML_WRAP =
+  '<!doctype html><html><head><meta name="viewport" '
+  + 'content="width=device-width,initial-scale=1"><style>'
+  + `body{margin:0;background:${C.bg};color:${C.text};`
+  + 'font-family:system-ui,-apple-system,sans-serif}'
+  + '</style></head><body>';
+const HTML_MEASURE =
+  '(function(){var p=function(){window.ReactNativeWebView.postMessage('
+  + 'String(document.documentElement.scrollHeight))};'
+  + 'window.addEventListener("load",p);setTimeout(p,60);setTimeout(p,400);'
+  + '})();true;';
+const INLINE_HTML_MAX = 420;
+
+function InlineHtml({ html, onExpand }: { html: string; onExpand: () => void }) {
+  const [h, setH] = useState(160);
+  const doc = /^\s*(<!doctype|<html)/i.test(html)
+    ? html : HTML_WRAP + html + '</body></html>';
+  return (
+    <View style={s.inlineHtml}>
+      <WebView
+        source={{ html: doc }}
+        style={{ height: Math.min(h, INLINE_HTML_MAX), backgroundColor: C.bg }}
+        scrollEnabled={false}
+        injectedJavaScript={HTML_MEASURE}
+        onMessage={(e) => {
+          const n = Number(e.nativeEvent.data);
+          if (n > 0) setH(n);
+        }}
+        setSupportMultipleWindows={false}
+        allowsLinkPreview={false}
+        originWhitelist={['*']}
+      />
+      <Pressable style={s.htmlExpand} onPress={onExpand}>
+        <Text style={s.htmlChipText}>
+          {h > INLINE_HTML_MAX ? '⤢ Full screen — clipped here' : '⤢ Full screen'}
+        </Text>
+      </Pressable>
+    </View>
+  );
 }
 
 export default function Workspace() {
@@ -328,6 +359,8 @@ export default function Workspace() {
     // markdown reads terribly aloud — drop the syntax, keep the words
     const t = raw
       .replace(/```[\s\S]*?```/g, ' code block. ')
+      .replace(/<style[\s\S]*?<\/style>/gi, ' ')
+      .replace(/<[^>]*>/g, ' ')
       .replace(/^\s*\|[\s:|-]+\|\s*$/gm, ' ')
       .replace(/`([^`]*)`/g, '$1')
       .replace(/\[([^\]]*)\]\([^)]*\)/g, '$1')
@@ -935,61 +968,54 @@ export default function Workspace() {
                     : item.text;
                   const dim = item.role === 'tool' || item.role === 'result'
                     || item.role === 'system';
-                  // a reply carrying HTML gets 🌐 chips that open it rendered
-                  // in the preview modal (the bubble itself stays raw source)
-                  const html = item.role === 'assistant' && item.text.includes('<')
-                    ? extractHtmlBlocks(item.text) : [];
-                  const withHtml = (el: ReactElement) => html.length === 0 ? el : (
-                    <View>
-                      {el}
-                      <View style={s.htmlChips}>
-                        {html.map((h, i) => (
-                          <Pressable
-                            key={i} style={s.htmlChip}
-                            onPress={() => setHtmlPreview(h)}
-                          >
-                            <Text style={s.htmlChipText}>
-                              🌐 Preview{html.length > 1 ? ` ${i + 1}` : ''}
+                  // rich segments: bare HTML blocks and ```html fences render
+                  // inline in an embedded web view; markdown tables re-pad
+                  // into aligned columns in a horizontal scroller; prose
+                  // between them stays a native text bubble
+                  if (item.role === 'assistant'
+                    && (item.text.includes('<') || item.text.includes('|'))) {
+                    const parts: Array<{ kind: 'text' | 'table' | 'html'; text: string }> = [];
+                    for (const hseg of splitHtml(item.text)) {
+                      if (hseg.html) { parts.push({ kind: 'html', text: hseg.text }); continue; }
+                      for (const tseg of splitMdTables(hseg.text)) {
+                        parts.push({ kind: tseg.table ? 'table' : 'text', text: tseg.text });
+                      }
+                    }
+                    if (parts.some((p) => p.kind !== 'text')) {
+                      return (
+                        <View style={s.chatMsg}>
+                          {parts.map((p, i) => p.kind === 'html' ? (
+                            <InlineHtml
+                              key={i} html={p.text}
+                              onExpand={() => setHtmlPreview(p.text)}
+                            />
+                          ) : p.kind === 'table' ? (
+                            <ScrollView
+                              key={i} horizontal style={s.tbl}
+                              showsHorizontalScrollIndicator={false}
+                            >
+                              <Text selectable style={[s.histText, { fontSize: chatFs }]}>
+                                {p.text}
+                              </Text>
+                            </ScrollView>
+                          ) : selTextAvailable ? (
+                            <SelText key={i} text={p.text} fontSize={chatFs} color={C.text} />
+                          ) : (
+                            <Text
+                              key={i} selectable
+                              style={[s.histText, { fontSize: chatFs }]}
+                            >
+                              {p.text}
                             </Text>
-                          </Pressable>
-                        ))}
-                      </View>
-                    </View>
-                  );
-                  // markdown tables wrap mid-row at phone widths and turn to
-                  // soup — re-pad them into aligned columns and give each its
-                  // own horizontal scroller so rows never wrap
-                  const segs = item.role === 'assistant' && item.text.includes('|')
-                    ? splitMdTables(item.text) : null;
-                  if (segs && segs.some((g) => g.table)) {
-                    return withHtml(
-                      <View style={s.chatMsg}>
-                        {segs.map((g, i) => g.table ? (
-                          <ScrollView
-                            key={i} horizontal style={s.tbl}
-                            showsHorizontalScrollIndicator={false}
-                          >
-                            <Text selectable style={[s.histText, { fontSize: chatFs }]}>
-                              {g.text}
-                            </Text>
-                          </ScrollView>
-                        ) : selTextAvailable ? (
-                          <SelText key={i} text={g.text} fontSize={chatFs} color={C.text} />
-                        ) : (
-                          <Text
-                            key={i} selectable
-                            style={[s.histText, { fontSize: chatFs }]}
-                          >
-                            {g.text}
-                          </Text>
-                        ))}
-                      </View>
-                    );
+                          ))}
+                        </View>
+                      );
+                    }
                   }
                   // native bubble: a real UITextView — drag-handle/mouse
                   // range selection and Cmd-C, which RN <Text> can't do
                   if (selTextAvailable) {
-                    return withHtml(
+                    return (
                       <View style={[s.chatMsg, item.role === 'user' && s.chatUser]}>
                         <SelText
                           text={body}
@@ -1000,7 +1026,7 @@ export default function Workspace() {
                       </View>
                     );
                   }
-                  return withHtml(
+                  return (
                     <Pressable
                       style={[s.chatMsg, item.role === 'user' && s.chatUser]}
                       onLongPress={() => {
@@ -1264,10 +1290,13 @@ const s = StyleSheet.create({
   chatInner: { padding: 10 },
   chatMsg: { marginVertical: 3 },
   tbl: { marginVertical: 4 },
-  htmlChips: { flexDirection: 'row', flexWrap: 'wrap', gap: 6, marginBottom: 4 },
-  htmlChip: {
-    borderColor: C.border, borderWidth: 1, borderRadius: 12,
-    paddingHorizontal: 10, paddingVertical: 4,
+  inlineHtml: {
+    marginVertical: 4, borderColor: C.border, borderWidth: 1,
+    borderRadius: 8, overflow: 'hidden',
+  },
+  htmlExpand: {
+    paddingHorizontal: 10, paddingVertical: 5,
+    borderTopWidth: 1, borderTopColor: C.border,
   },
   htmlChipText: { color: C.accent, fontSize: 12 },
   htmlWrap: { flex: 1, backgroundColor: C.panel },
