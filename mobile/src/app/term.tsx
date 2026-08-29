@@ -3,7 +3,9 @@
 // sidebar on wide screens, a chip strip on phones), terminal filling the
 // rest. Layout mirrors the web dashboard's always-visible sidebar instead of
 // v1's list → list → terminal drill-down.
-import { ElementType, useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import {
+  ElementType, ReactElement, useCallback, useEffect, useMemo, useRef, useState,
+} from 'react';
 import {
   Alert, FlatList, Keyboard, KeyboardAvoidingView, Modal, Platform, Pressable,
   ScrollView, StyleSheet, Text, TextInput, useWindowDimensions, View,
@@ -48,6 +50,19 @@ const modeLabel = (m?: string) => m === 'auto' ? '▶▶ auto mode'
 const fmtTokens = (t: number) =>
   t >= 1000 ? `${(t / 1000).toFixed(1)}k` : String(t);
 
+// HTML in a reply stays raw tags in the text bubble (right for reading the
+// code) — this finds what could open rendered instead: ```html fences, or a
+// reply that IS a bare HTML document.
+function extractHtmlBlocks(text: string): string[] {
+  const blocks: string[] = [];
+  const re = /```html\s*\n([\s\S]*?)```/gi;
+  for (let m = re.exec(text); m; m = re.exec(text)) {
+    if (m[1].trim()) blocks.push(m[1]);
+  }
+  if (!blocks.length && /^\s*(<!doctype html|<html)/i.test(text)) blocks.push(text);
+  return blocks;
+}
+
 export default function Workspace() {
   const params = useLocalSearchParams<{ box?: string; project?: string }>();
   const [boxes, setBoxes] = useState<Box[]>([]);
@@ -60,6 +75,7 @@ export default function Workspace() {
   const [copied, setCopied] = useState(false);
   const [dictating, setDictating] = useState(false);
   const [dictText, setDictText] = useState('');
+  const [htmlPreview, setHtmlPreview] = useState<string | null>(null);
   // composer height is pinned to measured content — iOS multiline inputs
   // otherwise balloon to maxHeight on focus even when empty
   const [composerH, setComposerH] = useState(0);
@@ -919,13 +935,34 @@ export default function Workspace() {
                     : item.text;
                   const dim = item.role === 'tool' || item.role === 'result'
                     || item.role === 'system';
+                  // a reply carrying HTML gets 🌐 chips that open it rendered
+                  // in the preview modal (the bubble itself stays raw source)
+                  const html = item.role === 'assistant' && item.text.includes('<')
+                    ? extractHtmlBlocks(item.text) : [];
+                  const withHtml = (el: ReactElement) => html.length === 0 ? el : (
+                    <View>
+                      {el}
+                      <View style={s.htmlChips}>
+                        {html.map((h, i) => (
+                          <Pressable
+                            key={i} style={s.htmlChip}
+                            onPress={() => setHtmlPreview(h)}
+                          >
+                            <Text style={s.htmlChipText}>
+                              🌐 Preview{html.length > 1 ? ` ${i + 1}` : ''}
+                            </Text>
+                          </Pressable>
+                        ))}
+                      </View>
+                    </View>
+                  );
                   // markdown tables wrap mid-row at phone widths and turn to
                   // soup — re-pad them into aligned columns and give each its
                   // own horizontal scroller so rows never wrap
                   const segs = item.role === 'assistant' && item.text.includes('|')
                     ? splitMdTables(item.text) : null;
                   if (segs && segs.some((g) => g.table)) {
-                    return (
+                    return withHtml(
                       <View style={s.chatMsg}>
                         {segs.map((g, i) => g.table ? (
                           <ScrollView
@@ -952,7 +989,7 @@ export default function Workspace() {
                   // native bubble: a real UITextView — drag-handle/mouse
                   // range selection and Cmd-C, which RN <Text> can't do
                   if (selTextAvailable) {
-                    return (
+                    return withHtml(
                       <View style={[s.chatMsg, item.role === 'user' && s.chatUser]}>
                         <SelText
                           text={body}
@@ -963,7 +1000,7 @@ export default function Workspace() {
                       </View>
                     );
                   }
-                  return (
+                  return withHtml(
                     <Pressable
                       style={[s.chatMsg, item.role === 'user' && s.chatUser]}
                       onLongPress={() => {
@@ -1142,6 +1179,30 @@ export default function Workspace() {
           </View>
         </KeyboardAvoidingView>
       </Modal>
+
+      {/* 🌐 HTML preview — a reply's HTML rendered in a real browser view.
+          Content is inline (source.html), so it works offline and for old
+          transcripts; external links open in place, ✕ comes back to chat. */}
+      <Modal visible={htmlPreview !== null} animationType="slide"
+        onRequestClose={() => setHtmlPreview(null)}>
+        <SafeAreaView style={s.htmlWrap} edges={['top', 'bottom']}>
+          <View style={s.htmlBar}>
+            <Text style={s.htmlTitle}>🌐 HTML preview</Text>
+            <Pressable style={s.htmlClose} onPress={() => setHtmlPreview(null)}>
+              <Text style={s.htmlCloseText}>✕</Text>
+            </Pressable>
+          </View>
+          {htmlPreview !== null && (
+            <WebView
+              source={{ html: htmlPreview }}
+              style={s.web}
+              originWhitelist={['*']}
+              setSupportMultipleWindows={false}
+              allowsLinkPreview={false}
+            />
+          )}
+        </SafeAreaView>
+      </Modal>
     </SafeAreaView>
   );
 }
@@ -1203,6 +1264,21 @@ const s = StyleSheet.create({
   chatInner: { padding: 10 },
   chatMsg: { marginVertical: 3 },
   tbl: { marginVertical: 4 },
+  htmlChips: { flexDirection: 'row', flexWrap: 'wrap', gap: 6, marginBottom: 4 },
+  htmlChip: {
+    borderColor: C.border, borderWidth: 1, borderRadius: 12,
+    paddingHorizontal: 10, paddingVertical: 4,
+  },
+  htmlChipText: { color: C.accent, fontSize: 12 },
+  htmlWrap: { flex: 1, backgroundColor: C.panel },
+  htmlBar: {
+    flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between',
+    paddingHorizontal: 12, paddingVertical: 8,
+    borderBottomWidth: 1, borderBottomColor: C.border,
+  },
+  htmlTitle: { color: C.text, fontSize: 14, fontWeight: '600' },
+  htmlClose: { paddingHorizontal: 8, paddingVertical: 2 },
+  htmlCloseText: { color: C.muted, fontSize: 18 },
   chatUser: { marginTop: 10 },
   chatDim: { color: C.muted, fontSize: 11 },
   chatStatus: {
