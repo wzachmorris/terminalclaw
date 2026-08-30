@@ -9,7 +9,7 @@ import {
   ScrollView, StyleSheet, Text, TextInput, useWindowDimensions, View,
 } from 'react-native';
 import { router, Stack, useFocusEffect, useLocalSearchParams } from 'expo-router';
-import { SafeAreaView } from 'react-native-safe-area-context';
+import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 import { WebView } from 'react-native-webview';
 import * as Clipboard from 'expo-clipboard';
 import * as DocumentPicker from 'expo-document-picker';
@@ -96,6 +96,10 @@ function InlineHtml({ html, onExpand }: { html: string; onExpand: () => void }) 
 
 export default function Workspace() {
   const params = useLocalSearchParams<{ box?: string; project?: string }>();
+  // SafeAreaView doesn't reliably apply insets inside a <Modal> on iOS (the
+  // provider sits outside the modal's native tree) — grab the numbers and
+  // pad modals by hand
+  const insets = useSafeAreaInsets();
   const [boxes, setBoxes] = useState<Box[]>([]);
   const [boxId, setBoxId] = useState<string | undefined>(params.box);
   const [projects, setProjects] = useState<Project[]>([]);
@@ -1211,11 +1215,16 @@ export default function Workspace() {
           transcripts; external links open in place, ✕ comes back to chat. */}
       <Modal visible={htmlPreview !== null} animationType="slide"
         onRequestClose={() => setHtmlPreview(null)}>
-        <SafeAreaView style={s.htmlWrap} edges={['top', 'bottom']}>
+        <View style={[s.htmlWrap, {
+          paddingTop: insets.top, paddingBottom: insets.bottom,
+        }]}>
           <View style={s.htmlBar}>
             <Text style={s.htmlTitle}>🌐 HTML preview</Text>
-            <Pressable style={s.htmlClose} onPress={() => setHtmlPreview(null)}>
-              <Text style={s.htmlCloseText}>✕</Text>
+            <Pressable
+              style={s.htmlClose} hitSlop={12}
+              onPress={() => setHtmlPreview(null)}
+            >
+              <Text style={s.htmlCloseText}>✕ Close</Text>
             </Pressable>
           </View>
           {htmlPreview !== null && (
@@ -1227,7 +1236,7 @@ export default function Workspace() {
               allowsLinkPreview={false}
             />
           )}
-        </SafeAreaView>
+        </View>
       </Modal>
     </SafeAreaView>
   );
@@ -1306,8 +1315,11 @@ const s = StyleSheet.create({
     borderBottomWidth: 1, borderBottomColor: C.border,
   },
   htmlTitle: { color: C.text, fontSize: 14, fontWeight: '600' },
-  htmlClose: { paddingHorizontal: 8, paddingVertical: 2 },
-  htmlCloseText: { color: C.muted, fontSize: 18 },
+  htmlClose: {
+    paddingHorizontal: 14, paddingVertical: 6,
+    borderColor: C.border, borderWidth: 1, borderRadius: 8,
+  },
+  htmlCloseText: { color: C.text, fontSize: 15 },
   chatUser: { marginTop: 10 },
   chatDim: { color: C.muted, fontSize: 11 },
   chatStatus: {
