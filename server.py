@@ -917,6 +917,90 @@ def _transcript_status(st, e):
             st["contextTokens"] = ctx
 
 
+_SHELLS = {"bash", "zsh", "sh", "dash", "fish", "ash", "ksh"}
+_OPT_RE = re.compile(r"^\s*(❯)?\s*(\d)\.\s+(\S.*)$")
+
+
+def _is_rule(line):
+    t = line.strip()
+    return len(t) >= 10 and set(t) <= {"─"}
+
+
+def _pane_prompt(pane):
+    """Pull Claude Code's on-screen question out of a captured pane.
+
+    Permission menus, AskUserQuestion pages and the folder-trust dialog are
+    TUI-only: drawn on the pane, never written to the transcript. Returns
+    {"text", "options"} or None. Each option carries how to pick it: "key"
+    (a digit — numbered menus select on the keypress) or "move" (rows from
+    the cursor — unnumbered menus need arrows + Enter).
+
+    Keyed on structure, not wording: the dialog replaces the input box, so
+    the LAST ❯ on the pane is the menu cursor — unless it sits directly
+    under a rule, which is the idle input box (same glyph). Footer hints
+    are no help; the Submit page has none.
+    """
+    lines = pane.rstrip("\n").split("\n")
+    while lines and not lines[-1].strip():
+        lines.pop()
+    cur = None
+    for i in range(len(lines) - 1, -1, -1):
+        if re.match(r"\s*❯(\s|$)", lines[i]):
+            cur = i
+            break
+    if cur is None or not re.match(r"\s*❯\s+\S", lines[cur]):
+        return None
+    if (cur > 0 and _is_rule(lines[cur - 1])
+            and any(_is_rule(l) for l in lines[cur + 1:])):
+        return None     # boxed between two rules = the input box
+    # the dialog starts under the nearest rule above the cursor — except
+    # AskUserQuestion draws a rule INSIDE its menu (above "Chat about
+    # this"): numbering that resumes past 1 below a rule gives that away
+    start, search_from = max(0, cur - 12), cur
+    while True:
+        r = None
+        for i in range(search_from - 1, -1, -1):
+            if _is_rule(lines[i]):
+                r = i
+                break
+        if r is None:
+            break
+        first_num = None
+        for l in lines[r + 1:]:
+            m = _OPT_RE.match(l)
+            if m:
+                first_num = int(m.group(2))
+                break
+        if first_num is not None and first_num > 1:
+            search_from = r
+            continue
+        start = r + 1
+        break
+    region = lines[start:]
+    options = []
+    for l in region:
+        m = _OPT_RE.match(l)
+        if m:
+            options.append({"label": m.group(3).strip(), "key": m.group(2),
+                            "cur": bool(m.group(1))})
+    if not options:
+        # unnumbered menu: the cursor row plus its contiguous siblings at
+        # the same label column
+        label = re.match(r"(\s*❯\s+)", lines[cur]).end()
+        lo = hi = cur
+        while (lo - 1 >= start and lines[lo - 1].strip()
+               and len(lines[lo - 1]) - len(lines[lo - 1].lstrip()) == label):
+            lo -= 1
+        while (hi + 1 < len(lines) and lines[hi + 1].strip()
+               and len(lines[hi + 1]) - len(lines[hi + 1].lstrip()) == label):
+            hi += 1
+        for i in range(lo, hi + 1):
+            options.append({"label": lines[i][label:].strip(),
+                            "move": i - cur, "cur": i == cur})
+    text = "\n".join("────" if _is_rule(l) else l.rstrip() for l in region)
+    return {"text": text.strip("\n")[:4000], "options": options[:12]}
+
+
 # Written by hooks/tab-session-map.py (a Claude Code SessionStart hook):
 # one <tab>.json per hub-* tmux tab, naming that tab's exact transcript file.
 TAB_SESSIONS = os.path.expanduser("~/.cache/terminalclaw/tab-sessions")
@@ -1013,18 +1097,31 @@ def claude_transcript(project, since):
             continue
     if start == 0:
         msgs = msgs[-200:]
-    # TUI-only interactivity (permission menus, login codes) is drawn on
-    # screen but never written to the transcript — peek at the live pane so
-    # chat mode can banner it. Always set (never folded from entries) so the
-    # client's merge clears it the moment the prompt is answered. The ❯ N.
-    # caret-menu pattern is distinctive to Claude Code's option prompts.
+    # TUI-only interactivity (permission menus, questions, login codes) is
+    # drawn on screen but never written to the transcript — peek at the live
+    # pane so chat mode can show and answer it. Always set (never folded
+    # from entries) so the client's merge clears each the moment it stops
+    # being true. atShell = claude exited and the tab is back at a shell
+    # prompt: the transcript still reads fine, but anything sent now would
+    # be typed into bash — the client must say so.
     status["awaitingInput"] = False
+    status["prompt"] = None
+    status["atShell"] = False
     try:
-        pane = subprocess.run(
-            ["tmux", "capture-pane", "-p", "-t", "hub-" + proj["id"]],
-            capture_output=True, text=True, timeout=5).stdout
-        status["awaitingInput"] = bool(
-            re.search(r"❯\s*\d+\.", pane) or "Paste code here" in pane)
+        tgt = "hub-" + proj["id"]
+        cmd = subprocess.run(
+            ["tmux", "display-message", "-p", "-t", tgt,
+             "#{pane_current_command}"],
+            capture_output=True, text=True, timeout=5).stdout.strip()
+        if cmd in _SHELLS:
+            status["atShell"] = True
+        else:
+            pane = subprocess.run(
+                ["tmux", "capture-pane", "-p", "-t", tgt],
+                capture_output=True, text=True, timeout=5).stdout
+            status["prompt"] = _pane_prompt(pane)
+            status["awaitingInput"] = bool(
+                status["prompt"] or "Paste code here" in pane)
     except Exception:
         pass
     return {"session": sid, "offset": end, "reset": reset, "messages": msgs,

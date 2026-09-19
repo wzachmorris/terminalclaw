@@ -20,6 +20,7 @@ import * as Speech from 'expo-speech';
 import { setAudioModeAsync } from 'expo-audio';
 import {
   ApiError, browseDir, BrowseEntry, ChatMsg as ChatMsgT, ChatStatus as ChatStatusT,
+  PromptOption,
   claudeTranscript, createProject, deleteProject,
   getProjects, moveProject, Project, setProjectHidden, termBuffer, termCapture,
   termKey, termMouse, termPaste, termUrl, uploadFile,
@@ -283,6 +284,8 @@ export default function Workspace() {
   const [chatStatus, setChatStatus] = useState<ChatStatusT>({});
   const chatStat = useRef<ChatStatusT>({});
   const chatSince = useRef('');
+  // out-of-band refresh — answering a prompt shouldn't wait out the 2s poll
+  const pullNow = useRef<() => void>(() => {});
   const chatActive = chatOn && chatAvail !== false;
   useEffect(() => {
     if (!chatOn || !box || !projectId) return;
@@ -347,6 +350,7 @@ export default function Workspace() {
       }
     };
     void pull();
+    pullNow.current = () => void pull();
     const t = setInterval(() => void pull(), 2000);
     // leaving the tab shuts the narrator up mid-sentence
     return () => { live = false; clearInterval(t); Speech.stop(); setSpeaking(false); };
@@ -496,11 +500,52 @@ export default function Workspace() {
     setDictText('');
     if (t.trim()) void sendSubmit(t);
   };
+  // the hub's `claude` wrapper (agent.bashrc) resumes the tab's last chat.
+  // Whatever it asks on the way up (folder trust, resume picker) surfaces
+  // in the prompt card like any other on-screen question.
+  const startClaude = async () => {
+    if (!box || !project) return;
+    try {
+      await termPaste(box, project.id, 'claude');
+      await termKey(box, project.id, 'enter');
+    } catch { /* next poll shows reality */ }
+    setTimeout(() => pullNow.current(), 1500);
+  };
+  // answer an on-screen prompt from chat — sequential so keys can't reorder,
+  // then a quick re-pull instead of waiting out the poll
+  const promptSend = async (keys: string[]) => {
+    if (!box || !project) return;
+    try {
+      for (const k of keys) await termKey(box, project.id, k);
+    } catch { /* next poll shows reality */ }
+    setTimeout(() => pullNow.current(), 350);
+  };
+  const pickOption = (o: PromptOption) => {
+    if (o.key) { void promptSend([o.key]); return; }
+    const n = o.move ?? 0;
+    void promptSend([
+      ...Array<string>(Math.abs(n)).fill(n < 0 ? 'up' : 'down'), 'enter',
+    ]);
+  };
   // paste + ⏎ — actually submits the message instead of leaving it on the
   // prompt for review; sequential so Enter can't outrun the paste
-  const sendSubmit = async (t: string) => {
+  const sendSubmit = async (t: string, toShell = false) => {
     if (chatActive) {
       if (!box || !project) return;
+      // claude exited: the transcript still reads like a live chat, but this
+      // would be typed into bash — make that a decision, not an accident
+      if (chatStatus.atShell && !toShell) {
+        Alert.alert("Claude isn't running",
+          'This tab is at the shell prompt — your message would be typed into bash.',
+          [
+            { text: 'Resume Claude first',
+              onPress: () => { setDictText(t); void startClaude(); } },
+            { text: 'Send to shell anyway', style: 'destructive',
+              onPress: () => void sendSubmit(t, true) },
+            { text: 'Cancel', style: 'cancel', onPress: () => setDictText(t) },
+          ]);
+        return;
+      }
       try {
         await termPaste(box, project.id, t);
         await termKey(box, project.id, 'enter');
@@ -855,10 +900,60 @@ export default function Workspace() {
       )}
     </ScrollView>
   ) : null;
-  // TUI-only prompts (permission menus, login codes) never reach the
-  // transcript — when the server spots one on the live pane, banner it
-  // here; tapping flips to the terminal to answer.
-  const promptBanner = chatActive && chatStatus.awaitingInput ? (
+  // TUI-only prompts (permission menus, questions, folder trust) never
+  // reach the transcript — the server parses them off the live pane and
+  // this card shows the question with its options as buttons, plus a key
+  // row for anything a tap can't express (multi-select, tabs between
+  // questions). "Type something" options work too: pick it, then use the
+  // composer. Older servers only send the flag → the old banner.
+  const livePrompt = chatActive ? chatStatus.prompt : null;
+  const promptBanner = chatActive && chatStatus.atShell ? (
+    <View style={s.shellBanner}>
+      <Text style={s.shellBannerText}>
+        ⏹ Claude isn't running in this tab — it's at the shell prompt
+      </Text>
+      <View style={s.promptKeys}>
+        <Pressable style={[s.promptKey, s.shellGo]} onPress={() => void startClaude()}>
+          <Text style={s.shellGoText}>▶ Resume Claude</Text>
+        </Pressable>
+        <Pressable style={s.promptKey} onPress={toggleChat}>
+          <Text style={s.promptKeyText}>🖥 Terminal</Text>
+        </Pressable>
+      </View>
+    </View>
+  ) : livePrompt ? (
+    <View style={s.promptCard}>
+      <ScrollView style={s.promptTextWrap} nestedScrollEnabled>
+        <Text selectable style={[s.histText, { fontSize: Math.min(chatFs, 14) }]}>
+          {livePrompt.text}
+        </Text>
+      </ScrollView>
+      <View style={s.promptOpts}>
+        {livePrompt.options.map((o, i) => (
+          <Pressable
+            key={i} style={[s.promptOpt, o.cur && s.promptOptCur]}
+            onPress={() => pickOption(o)}
+          >
+            <Text style={s.promptOptText} numberOfLines={2}>
+              {o.key ? `${o.key}. ` : ''}{o.label}
+            </Text>
+          </Pressable>
+        ))}
+      </View>
+      <View style={s.promptKeys}>
+        {([['↑', 'up'], ['↓', 'down'], ['←', 'left'], ['→', 'right'],
+          ['⇥', 'tab'], ['␣', 'space'], ['⏎', 'enter'], ['Esc', 'esc'],
+        ] as const).map(([label, key]) => (
+          <Pressable key={key} style={s.promptKey} onPress={() => void promptSend([key])}>
+            <Text style={s.promptKeyText}>{label}</Text>
+          </Pressable>
+        ))}
+        <Pressable style={s.promptKey} onPress={toggleChat}>
+          <Text style={s.promptKeyText}>🖥</Text>
+        </Pressable>
+      </View>
+    </View>
+  ) : chatActive && chatStatus.awaitingInput ? (
     <Pressable onPress={toggleChat}>
       <Text style={s.promptBanner} numberOfLines={1}>
         ⚠ Claude is asking something in the terminal — tap to answer
@@ -1355,6 +1450,31 @@ const s = StyleSheet.create({
     paddingHorizontal: 14, paddingVertical: 5, backgroundColor: C.panel,
     borderTopWidth: StyleSheet.hairlineWidth, borderTopColor: C.border,
   },
+  promptCard: {
+    backgroundColor: C.panel, borderColor: C.amber, borderWidth: 1,
+    borderRadius: 10, margin: 8, padding: 10, gap: 8,
+  },
+  promptTextWrap: { maxHeight: 220 },
+  promptOpts: { gap: 6 },
+  promptOpt: {
+    borderColor: C.border, borderWidth: 1, borderRadius: 8,
+    paddingHorizontal: 12, paddingVertical: 10, backgroundColor: C.bg,
+  },
+  promptOptCur: { borderColor: C.accent },
+  promptOptText: { color: C.text, fontSize: 15 },
+  promptKeys: { flexDirection: 'row', flexWrap: 'wrap', gap: 6 },
+  promptKey: {
+    borderColor: C.border, borderWidth: 1, borderRadius: 8,
+    paddingHorizontal: 12, paddingVertical: 8, minWidth: 40, alignItems: 'center',
+  },
+  promptKeyText: { color: C.muted, fontSize: 14, fontWeight: '600' },
+  shellBanner: {
+    backgroundColor: C.panel, borderColor: C.red, borderWidth: 1,
+    borderRadius: 10, margin: 8, padding: 10, gap: 8,
+  },
+  shellBannerText: { color: C.red, fontSize: 13, fontWeight: '600' },
+  shellGo: { backgroundColor: C.accent, borderColor: C.accent },
+  shellGoText: { color: C.bg, fontSize: 14, fontWeight: '600' },
   chatBar: {
     flexDirection: 'row', alignItems: 'flex-end', gap: 6,
     padding: 8, backgroundColor: C.panel,

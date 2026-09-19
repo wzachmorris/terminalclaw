@@ -155,7 +155,17 @@ export type ChatStatus = {
   // the live pane is showing TUI-only interactivity (permission menu, login
   // code) that never reaches the transcript — chat mode banners it
   awaitingInput?: boolean;
+  // the on-screen question itself, parsed off the pane so chat mode can show
+  // and answer it (absent on older servers — fall back to the banner)
+  prompt?: PanePrompt | null;
+  // claude exited; the tab is at a shell prompt, so anything sent now would
+  // be typed into bash
+  atShell?: boolean;
 };
+// how to pick an option: `key` = press that digit (numbered menus select on
+// the keypress); `move` = rows from the cursor, then Enter (unnumbered menus)
+export type PromptOption = { label: string; key?: string; move?: number; cur: boolean };
+export type PanePrompt = { text: string; options: PromptOption[] };
 export async function claudeTranscript(box: Box, project: string, since: string):
     Promise<{ session: string | null; offset: number; reset: boolean; messages: ChatMsg[];
       status?: ChatStatus }> {
