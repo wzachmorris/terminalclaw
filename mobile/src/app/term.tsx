@@ -64,12 +64,23 @@ const HTML_MEASURE =
   + 'String(document.documentElement.scrollHeight))};'
   + 'window.addEventListener("load",p);setTimeout(p,60);setTimeout(p,400);'
   + '})();true;';
+// fullscreen preview only: WKWebView obeys a page's viewport scale limits,
+// and agent-written pages often pin maximum-scale=1 — rewrite the meta so
+// pinch-zoom always works (dense report tables need it on a phone)
+const HTML_ZOOM =
+  '(function(){var m=document.querySelector("meta[name=viewport]");'
+  + 'if(!m){m=document.createElement("meta");m.name="viewport";'
+  + '(document.head||document.documentElement).appendChild(m);}'
+  + 'm.content="width=device-width,initial-scale=1,minimum-scale=0.5,'
+  + 'maximum-scale=8,user-scalable=yes";})();true;';
 const INLINE_HTML_MAX = 420;
+
+const htmlDoc = (html: string) => /^\s*(<!doctype|<html)/i.test(html)
+  ? html : HTML_WRAP + html + '</body></html>';
 
 function InlineHtml({ html, onExpand }: { html: string; onExpand: () => void }) {
   const [h, setH] = useState(160);
-  const doc = /^\s*(<!doctype|<html)/i.test(html)
-    ? html : HTML_WRAP + html + '</body></html>';
+  const doc = htmlDoc(html);
   return (
     <View style={s.inlineHtml}>
       <WebView
@@ -154,7 +165,7 @@ export default function Workspace() {
   const Z = ZOOMS[zoomI];
 
   // chat text size — Aa in the chat bar cycles 4 steps, persisted per device
-  const CHAT_SIZES = [12, 14, 17, 20];
+  const CHAT_SIZES = [12, 14, 17, 20, 24];
   const [chatSizeI, setChatSizeI] = useState(0);
   useEffect(() => {
     void SecureStore.getItemAsync('tc.chatSize').then((r) => {
@@ -1229,8 +1240,10 @@ export default function Workspace() {
           </View>
           {htmlPreview !== null && (
             <WebView
-              source={{ html: htmlPreview }}
+              source={{ html: htmlDoc(htmlPreview) }}
               style={s.web}
+              injectedJavaScript={HTML_ZOOM}
+              onMessage={() => {}}
               originWhitelist={['*']}
               setSupportMultipleWindows={false}
               allowsLinkPreview={false}
