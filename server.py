@@ -922,8 +922,10 @@ _OPT_RE = re.compile(r"^\s*(❯)?\s*(\d)\.\s+(\S.*)$")
 
 
 def _is_rule(line):
+    # a plain rule, or one carrying a label (the input box's top rule shows
+    # the session name: "──── 🇨🇴 content recovery ─")
     t = line.strip()
-    return len(t) >= 10 and set(t) <= {"─"}
+    return t.startswith("─" * 10)
 
 
 def _pane_prompt(pane):
@@ -994,6 +996,8 @@ def _pane_prompt(pane):
         while (hi + 1 < len(lines) and lines[hi + 1].strip()
                and len(lines[hi + 1]) - len(lines[hi + 1].lstrip()) == label):
             hi += 1
+        if hi == lo:
+            return None     # a lone ❯ line is input, never a menu
         for i in range(lo, hi + 1):
             options.append({"label": lines[i][label:].strip(),
                             "move": i - cur, "cur": i == cur})
