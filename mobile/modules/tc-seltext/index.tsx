@@ -10,8 +10,15 @@ type NativeProps = {
   text: string;
   fontSize?: number;
   color?: string;
+  runsJson?: string;
   onSize?: (e: { nativeEvent: { height: number } }) => void;
   style?: StyleProp<ViewStyle>;
+};
+
+// style runs over `text` (UTF-16 offsets) — see lib/mdstyle.ts
+export type SelRun = {
+  s: number; l: number;
+  b?: boolean; i?: boolean; u?: boolean; c?: string; bg?: string;
 };
 
 let Native: React.ComponentType<NativeProps> | null = null;
@@ -30,8 +37,9 @@ export const selTextAvailable = !!Native;
 // Native measures the text at its laid-out width and reports the real height
 // via onSize; until that lands we estimate from length so long messages
 // don't mount at 0 height and make the inverted list jump.
-export function SelText({ text, fontSize = 12, color = '#e6edf3', style }: {
-  text: string; fontSize?: number; color?: string; style?: StyleProp<ViewStyle>;
+export function SelText({ text, fontSize = 12, color = '#e6edf3', runs, style }: {
+  text: string; fontSize?: number; color?: string; runs?: SelRun[];
+  style?: StyleProp<ViewStyle>;
 }) {
   const [h, setH] = useState(0);
   if (!Native) return null;
@@ -42,6 +50,7 @@ export function SelText({ text, fontSize = 12, color = '#e6edf3', style }: {
       text={text}
       fontSize={fontSize}
       color={color}
+      runsJson={runs && runs.length ? JSON.stringify(runs) : ''}
       style={[style, { height: h || est }]}
       onSize={(e) => setH(e.nativeEvent.height)}
     />

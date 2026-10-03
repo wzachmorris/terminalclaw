@@ -27,6 +27,7 @@ import {
 } from '@/lib/api';
 import { Box, loadBoxes, tokenAlive } from '@/lib/boxes';
 import { splitHtml } from '@/lib/mdhtml';
+import { styleMarkdown, Styled, toSpans } from '@/lib/mdstyle';
 import { splitMdTables } from '@/lib/mdtable';
 import { C } from '@/lib/theme';
 import { SelText, selTextAvailable } from '../../modules/tc-seltext';
@@ -75,6 +76,37 @@ const HTML_ZOOM =
   + 'm.content="width=device-width,initial-scale=1,minimum-scale=0.5,'
   + 'maximum-scale=8,user-scalable=yes";})();true;';
 const INLINE_HTML_MAX = 420;
+
+// a chat bubble painted with style runs: the native UITextView (attributed
+// text, real selection) when the binary has it, nested <Text> spans
+// otherwise. Messages are immutable, so styling is cached by text.
+const styleCache = new Map<string, Styled>();
+function styled(text: string): Styled {
+  let st = styleCache.get(text);
+  if (!st) {
+    st = styleMarkdown(text);
+    if (styleCache.size > 600) styleCache.clear();
+    styleCache.set(text, st);
+  }
+  return st;
+}
+function Bubble({ st, fontSize, color }: { st: Styled; fontSize: number; color: string }) {
+  if (selTextAvailable) {
+    return <SelText text={st.text} fontSize={fontSize} color={color} runs={st.runs} />;
+  }
+  return (
+    <Text selectable style={[s.histText, { fontSize, color }]}>
+      {toSpans(st).map((sp, i) => sp.run ? (
+        <Text key={i} style={{
+          fontWeight: sp.run.b ? '700' : undefined,
+          fontStyle: sp.run.i ? 'italic' : undefined,
+          textDecorationLine: sp.run.u ? 'underline' : undefined,
+          color: sp.run.c, backgroundColor: sp.run.bg,
+        }}>{sp.text}</Text>
+      ) : sp.text)}
+    </Text>
+  );
+}
 
 const htmlDoc = (html: string) => /^\s*(<!doctype|<html)/i.test(html)
   ? html : HTML_WRAP + html + '</body></html>';
@@ -1071,19 +1103,14 @@ export default function Workspace() {
                   </Text>
                 }
                 renderItem={({ item }) => {
-                  const body = item.role === 'user' ? `❯ ${item.text}`
-                    : item.role === 'tool' ? `● ${item.text}`
-                    : item.role === 'result' ? `  ⎿ ${item.text}`
-                    : item.role === 'system' ? `✻ ${item.text}`
-                    : item.text;
                   const dim = item.role === 'tool' || item.role === 'result'
                     || item.role === 'system';
-                  // rich segments: bare HTML blocks and ```html fences render
-                  // inline in an embedded web view; markdown tables re-pad
-                  // into aligned columns in a horizontal scroller; prose
-                  // between them stays a native text bubble
-                  if (item.role === 'assistant'
-                    && (item.text.includes('<') || item.text.includes('|'))) {
+                  // assistant replies: markdown styled like the TUI colors
+                  // it (bold, headings, `code`, bullets, links); bare HTML
+                  // blocks and ```html fences render inline in an embedded
+                  // web view; markdown tables re-pad into aligned columns in
+                  // a horizontal scroller
+                  if (item.role === 'assistant') {
                     const parts: Array<{ kind: 'text' | 'table' | 'html'; text: string }> = [];
                     for (const hseg of splitHtml(item.text)) {
                       if (hseg.html) { parts.push({ kind: 'html', text: hseg.text }); continue; }
@@ -1091,48 +1118,46 @@ export default function Workspace() {
                         parts.push({ kind: tseg.table ? 'table' : 'text', text: tseg.text });
                       }
                     }
-                    if (parts.some((p) => p.kind !== 'text')) {
-                      return (
-                        <View style={s.chatMsg}>
-                          {parts.map((p, i) => p.kind === 'html' ? (
-                            <InlineHtml
-                              key={i} html={p.text}
-                              onExpand={() => setHtmlPreview(p.text)}
-                            />
-                          ) : p.kind === 'table' ? (
-                            <ScrollView
-                              key={i} horizontal style={s.tbl}
-                              showsHorizontalScrollIndicator={false}
-                            >
-                              <Text selectable style={[s.histText, { fontSize: chatFs }]}>
-                                {p.text}
-                              </Text>
-                            </ScrollView>
-                          ) : selTextAvailable ? (
-                            <SelText key={i} text={p.text} fontSize={chatFs} color={C.text} />
-                          ) : (
-                            <Text
-                              key={i} selectable
-                              style={[s.histText, { fontSize: chatFs }]}
-                            >
+                    return (
+                      <View style={s.chatMsg}>
+                        {parts.map((p, i) => p.kind === 'html' ? (
+                          <InlineHtml
+                            key={i} html={p.text}
+                            onExpand={() => setHtmlPreview(p.text)}
+                          />
+                        ) : p.kind === 'table' ? (
+                          <ScrollView
+                            key={i} horizontal style={s.tbl}
+                            showsHorizontalScrollIndicator={false}
+                          >
+                            <Text selectable style={[s.histText, { fontSize: chatFs }]}>
                               {p.text}
                             </Text>
-                          ))}
-                        </View>
-                      );
-                    }
+                          </ScrollView>
+                        ) : (
+                          <Bubble key={i} st={styled(p.text)} fontSize={chatFs} color={C.text} />
+                        ))}
+                      </View>
+                    );
                   }
+                  const body = item.role === 'user' ? `❯ ${item.text}`
+                    : item.role === 'tool' ? `● ${item.text}`
+                    : item.role === 'result' ? `  ⎿ ${item.text}`
+                    : `✻ ${item.text}`;
+                  // tool lines: the tool's name in bold, like the TUI's ● rows
+                  const paren = item.role === 'tool' ? body.indexOf('(') : -1;
+                  const st: Styled = {
+                    text: body,
+                    runs: paren > 2 ? [{ s: 2, l: paren - 2, b: true }] : [],
+                  };
+                  const color = item.role === 'user' ? C.accent : dim ? C.muted : C.text;
+                  const fontSize = dim ? chatFs - 1 : chatFs;
                   // native bubble: a real UITextView — drag-handle/mouse
                   // range selection and Cmd-C, which RN <Text> can't do
                   if (selTextAvailable) {
                     return (
                       <View style={[s.chatMsg, item.role === 'user' && s.chatUser]}>
-                        <SelText
-                          text={body}
-                          fontSize={dim ? chatFs - 1 : chatFs}
-                          color={item.role === 'user' ? C.accent
-                            : dim ? C.muted : C.text}
-                        />
+                        <Bubble st={st} fontSize={fontSize} color={color} />
                       </View>
                     );
                   }
@@ -1145,17 +1170,7 @@ export default function Workspace() {
                         setTimeout(() => setCopied(false), 1500);
                       }}
                     >
-                      <Text
-                        selectable
-                        style={[
-                          s.histText,
-                          item.role === 'user' && { color: C.accent },
-                          dim && s.chatDim,
-                          { fontSize: dim ? chatFs - 1 : chatFs },
-                        ]}
-                      >
-                        {body}
-                      </Text>
+                      <Bubble st={st} fontSize={fontSize} color={color} />
                     </Pressable>
                   );
                 }}

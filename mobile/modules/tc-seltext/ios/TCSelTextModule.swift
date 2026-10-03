@@ -15,6 +15,11 @@ public final class TCSelTextView: ExpoView {
     private var lastReported: CGFloat = -1
     private var fontSize: CGFloat = 12
     private var colorHex = "#e6edf3"
+    private var text = ""
+    // style runs from the JS markdown styler: [{s, l, b?, i?, u?, c?, bg?}]
+    // with UTF-16 offsets (what NSString counts), shipped as JSON because
+    // that round-trips through the prop bridge without a converter
+    private var runs: [[String: Any]] = []
 
     public required init(appContext: AppContext? = nil) {
         super.init(appContext: appContext)
@@ -29,8 +34,18 @@ public final class TCSelTextView: ExpoView {
     }
 
     func setText(_ t: String) {
-        tv.text = t
-        setNeedsLayout()
+        text = t
+        applyStyle()
+    }
+
+    func setRunsJson(_ json: String) {
+        if let data = json.data(using: .utf8),
+           let arr = try? JSONSerialization.jsonObject(with: data) as? [[String: Any]] {
+            runs = arr
+        } else {
+            runs = []
+        }
+        applyStyle()
     }
 
     func setFontSize(_ s: Double) {
@@ -44,9 +59,38 @@ public final class TCSelTextView: ExpoView {
     }
 
     private func applyStyle() {
-        tv.font = UIFont(name: "Menlo", size: fontSize)
+        let base = UIFont(name: "Menlo", size: fontSize)
             ?? .monospacedSystemFont(ofSize: fontSize, weight: .regular)
-        tv.textColor = Self.color(fromHex: colorHex) ?? .white
+        let baseColor = Self.color(fromHex: colorHex) ?? .white
+        tv.font = base
+        tv.textColor = baseColor
+        let ns = text as NSString
+        let attr = NSMutableAttributedString(
+            string: text, attributes: [.font: base, .foregroundColor: baseColor])
+        for r in runs {
+            guard let s = r["s"] as? Int, let l = r["l"] as? Int,
+                  s >= 0, l > 0, s + l <= ns.length else { continue }
+            let range = NSRange(location: s, length: l)
+            let bold = r["b"] as? Bool ?? false
+            let ital = r["i"] as? Bool ?? false
+            if bold || ital {
+                let name = bold && ital ? "Menlo-BoldItalic"
+                    : bold ? "Menlo-Bold" : "Menlo-Italic"
+                attr.addAttribute(.font, value: UIFont(name: name, size: fontSize) ?? base,
+                                  range: range)
+            }
+            if let c = r["c"] as? String, let col = Self.color(fromHex: c) {
+                attr.addAttribute(.foregroundColor, value: col, range: range)
+            }
+            if let bg = r["bg"] as? String, let col = Self.color(fromHex: bg) {
+                attr.addAttribute(.backgroundColor, value: col, range: range)
+            }
+            if r["u"] as? Bool == true {
+                attr.addAttribute(.underlineStyle,
+                                  value: NSUnderlineStyle.single.rawValue, range: range)
+            }
+        }
+        tv.attributedText = attr
         setNeedsLayout()
     }
 
@@ -88,6 +132,9 @@ public class TCSelTextModule: Module {
             }
             Prop("color") { (view: TCSelTextView, hex: String) in
                 view.setColor(hex)
+            }
+            Prop("runsJson") { (view: TCSelTextView, json: String) in
+                view.setRunsJson(json)
             }
         }
     }
