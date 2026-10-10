@@ -356,7 +356,8 @@ export default function Workspace() {
           // auto-speak: voice each newly-arrived reply, never the backlog a
           // first load / session reset brings in
           if (!first && !r.reset && autoSpeakRef.current) {
-            const said = r.messages.filter((m) => m.role === 'assistant')
+            const said = r.messages
+              .filter((m) => m.role === 'assistant' || m.role === 'summary')
               .map((m) => m.text).join('. ');
             if (said) speakText(said);
           }
@@ -1110,7 +1111,13 @@ export default function Workspace() {
                   // blocks and ```html fences render inline in an embedded
                   // web view; markdown tables re-pad into aligned columns in
                   // a horizontal scroller
-                  if (item.role === 'assistant') {
+                  // "summary" = the progress note the TUI shows between tool
+                  // batches ("… · summary"): assistant styling plus the tag
+                  if (item.role === 'assistant' || item.role === 'summary') {
+                    const tag = (st: Styled): Styled => item.role !== 'summary' ? st : {
+                      text: st.text + ' · summary',
+                      runs: [...st.runs, { s: st.text.length, l: 10, c: C.muted, i: true }],
+                    };
                     const parts: Array<{ kind: 'text' | 'table' | 'html'; text: string }> = [];
                     for (const hseg of splitHtml(item.text)) {
                       if (hseg.html) { parts.push({ kind: 'html', text: hseg.text }); continue; }
@@ -1135,7 +1142,10 @@ export default function Workspace() {
                             </Text>
                           </ScrollView>
                         ) : (
-                          <Bubble key={i} st={styled(p.text)} fontSize={chatFs} color={C.text} />
+                          <Bubble
+                            key={i} fontSize={chatFs} color={C.text}
+                            st={i === parts.length - 1 ? tag(styled(p.text)) : styled(p.text)}
+                          />
                         ))}
                       </View>
                     );

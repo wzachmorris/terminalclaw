@@ -833,8 +833,10 @@ def term_capture(project, lines):
 
 def _transcript_msgs(e):
     """Flatten one Claude Code transcript entry into displayable messages.
-    Skips sidechains (subagent traffic), meta entries, thinking blocks, and
-    harness-injected wrappers; tool calls/results collapse to one-liners.
+    Skips sidechains (subagent traffic), meta entries, and harness-injected
+    wrappers; tool calls/results collapse to one-liners; thinking blocks
+    that carry text (the TUI's progress summaries) come through as role
+    "summary".
     System entries the TUI shows between turns (recap, compaction, turn
     timer, model-fallback notices) come through as role "system"."""
     if e.get("type") == "system" and not e.get("isSidechain"):
@@ -880,6 +882,13 @@ def _transcript_msgs(e):
             t = (b.get("text") or "").strip()
             if t and not (role == "user" and t.startswith("<")):
                 out.append({"role": role, "text": t, "ts": ts})
+        elif bt == "thinking":
+            # the reasoning itself is never stored (empty text + signature);
+            # a thinking block WITH text is the short progress summary the
+            # TUI shows between tool batches as "… · summary"
+            t = (b.get("thinking") or "").strip()
+            if t and role == "assistant":
+                out.append({"role": "summary", "text": t[:2000], "ts": ts})
         elif bt == "tool_use":
             inp = b.get("input") or {}
             hint = (inp.get("description") or inp.get("command")
