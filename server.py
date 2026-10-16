@@ -453,6 +453,8 @@ def set_project_hidden(pid, hidden):
     proj = _find_project(reg, (pid or "").strip())
     if not proj:
         raise ValueError("unknown project")
+    if proj.get("builtin"):
+        raise ValueError("built-in tab")
     if hidden:
         proj["hidden"] = True
     else:
@@ -487,6 +489,8 @@ def delete_project(pid):
     proj = _find_project(reg, (pid or "").strip())
     if not proj:
         raise ValueError("unknown project")
+    if proj.get("builtin"):
+        raise ValueError("built-in tab")
     stamp = time.strftime("%Y%m%d-%H%M%S")
     try:
         with open(f"{REGISTRY}.bak-pre-delete-{proj['id']}-{stamp}", "w", encoding="utf-8") as f:
@@ -503,8 +507,28 @@ def delete_project(pid):
 DOC_MAX = 512 * 1024   # cap on a single document tab's size, bytes
 
 
+# The built-in 🖥 Shell tab: a plain terminal in $HOME with no project around
+# it — no registry entry, no CLAUDE.md, no claude wrapper. Lives outside the
+# registry (a leading underscore can't come out of add_project's slugger, so
+# it can never collide) and is appended to every /api/projects reply; term.sh
+# special-cases the id. Key/paste/capture work through _find_project like any
+# tab; hide/move/delete refuse it; its `command` keeps chat mode off.
+SHELL_ID = "_shell"
+
+
+def _shell_project():
+    return {
+        "id": SHELL_ID, "name": "🖥 Shell", "dir": os.path.expanduser("~"),
+        "command": "bash", "builtin": True,
+        "domains": [], "containers": [], "services": [], "memory": [],
+    }
+
+
 def _find_project(reg, pid):
-    return next((p for p in reg.get("projects", []) if p.get("id") == pid), None)
+    p = next((p for p in reg.get("projects", []) if p.get("id") == pid), None)
+    if p is None and pid == SHELL_ID:
+        return _shell_project()
+    return p
 
 
 def _read_spec(spec):
@@ -554,6 +578,8 @@ def add_tab(pid, label, file):
     proj = _find_project(reg, pid)
     if not proj:
         raise ValueError("unknown project")
+    if proj.get("builtin"):
+        raise ValueError("built-in tab")
     proj.setdefault("tabs", []).append({"label": label, "file": path})
     write_registry(reg)
     return len(proj["tabs"]) - 1
@@ -708,6 +734,8 @@ def add_memory(project, name):
     proj = _find_project(reg, project)
     if not proj:
         raise ValueError("unknown project")
+    if proj.get("builtin"):
+        raise ValueError("built-in tab")
     fname = _slug_md(name)
     target = _memory_dir_for(proj)
     os.makedirs(target, exist_ok=True)
@@ -759,6 +787,22 @@ TERM_KEYS = {
 }
 
 
+def _leave_copy_mode(session):
+    """Drop the pane out of tmux copy mode before injecting input.
+
+    A swipe/wheel in the terminal view (mouse mode is on fleet-wide) parks
+    the pane in copy mode, and it stays there — new output doesn't clear
+    it. In that state paste-buffer still reaches the program's input, but
+    send-keys goes to copy mode, which swallows them: chat mode's "paste +
+    ⏎" left the message sitting unsent in Claude's input box with nothing
+    on screen in the app to say so. One if-shell call: cancel only when
+    the pane is actually in a mode (a bare -X cancel errors otherwise).
+    """
+    subprocess.run(["tmux", "if-shell", "-F", "-t", session, "#{pane_in_mode}",
+                    f"send-keys -t {session} -X cancel"],
+                   check=False, timeout=5)
+
+
 def term_send_key(project, key):
     """Inject one whitelisted keystroke into project <id>'s tmux session.
 
@@ -773,7 +817,9 @@ def term_send_key(project, key):
     tok = TERM_KEYS.get((key or "").strip().lower())
     if tok is None:
         raise ValueError("key not allowed")
-    subprocess.run(["tmux", "send-keys", "-t", "hub-" + proj["id"], tok],
+    session = "hub-" + proj["id"]
+    _leave_copy_mode(session)
+    subprocess.run(["tmux", "send-keys", "-t", session, tok],
                    check=False, timeout=5)
 
 
@@ -792,6 +838,7 @@ def term_paste(project, text):
     if not text:
         return
     session = "hub-" + proj["id"]
+    _leave_copy_mode(session)
     subprocess.run(["tmux", "set-buffer", "-b", "tcpaste", "--", text],
                    check=False, timeout=5)
     subprocess.run(["tmux", "paste-buffer", "-p", "-d", "-b", "tcpaste",
@@ -1666,6 +1713,12 @@ class Handler(BaseHTTPRequestHandler):
                 # agent has chosen to remember) — surfaced read/edit in the UI.
                 cmd = claude_mem_dir(p.get("dir", ""))
                 p["agent_memory"] = list_md(cmd) if cmd else []
+            # the built-in Shell tab rides along last, with the per-project
+            # extras pre-emptied so clients render it like any other card
+            reg["projects"].append({
+                **_shell_project(), "status": {}, "svc_status": {},
+                "claude_running": SHELL_ID in agents, "agent_memory": [],
+            })
             reg["generated"] = True
             return self._send(200, reg)
 

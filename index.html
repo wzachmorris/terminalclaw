@@ -399,17 +399,18 @@ function renderSidebar(){
     }
     const domains=(p.domains&&p.domains.length)?p.domains.join(", "):"<i>no public domain</i>";
     const dot=p.claude_running?'<span class="claude" title="Claude is running"></span>':'';
-    c.innerHTML=`<div class="card-top">${dot}<h3>${esc(p.name)}</h3>`+
-                `<span class="card-actions">`+
+    // the server's built-in 🖥 Shell tab can't be hidden/deleted/recolored
+    const actions=p.builtin?'':`<span class="card-actions">`+
                 `<button class="cact" title="Hide project (keeps everything, just tucks it away)" `+
                 `onclick="event.stopPropagation();setHidden('${p.id}',true)">−</button>`+
                 `<button class="cact danger" title="Delete project tab (files on disk are NOT touched)" `+
                 `onclick="event.stopPropagation();deleteProject('${p.id}')">🗑</button>`+
                 `</span>`+
                 `<button class="swatch ${p.color?'':'empty'}" title="Color tag" `+
-                `onclick="openPalette(event,'${p.id}')"></button></div>`+
-                `<div class="domains">${domains}</div>`+
-                `<div class="pills">${pillsHtml(p)}</div>`;
+                `onclick="openPalette(event,'${p.id}')"></button>`;
+    c.innerHTML=`<div class="card-top">${dot}<h3>${esc(p.name)}</h3>${actions}</div>`+
+                `<div class="domains">${p.builtin?'plain terminal, no project':domains}</div>`+
+                `<div class="pills">${p.builtin?'':pillsHtml(p)}</div>`;
     sb.appendChild(c);
   });
   const hidden=PROJECTS.filter(p=>p.hidden);

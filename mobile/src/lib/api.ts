@@ -42,6 +42,9 @@ export type Project = {
   hidden?: boolean;
   claude_running?: boolean;
   domains?: string[];
+  // the server's built-in 🖥 Shell tab: not in the registry, can't be
+  // moved/hidden/deleted, never has a transcript (absent on older servers)
+  builtin?: boolean;
 };
 
 export async function getProjects(box: Box):

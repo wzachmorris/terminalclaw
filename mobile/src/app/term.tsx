@@ -693,6 +693,10 @@ export default function Workspace() {
     if (!box) return;
     const b = box;
     const reload = () => void loadProjects();
+    if (p.builtin) {
+      Alert.alert(p.name, 'Built-in: a plain terminal in the home directory, no project attached.');
+      return;
+    }
     Alert.alert(p.name, undefined, [
       { text: '↑ Move up',
         onPress: () => void moveProject(b, p.id, -1).then(reload).catch(() => {}) },
@@ -878,10 +882,13 @@ export default function Workspace() {
       {/* terminal mode is just a terminal now — chat owns reading,
           copying and composing. Slim bar: back to chat, the ⌨ key
           drawer, scrollback, engine toggles. Everything else folds
-          into ⌨. */}
-      <Pressable style={[s.kbtn, s.kwide]} onPress={toggleChat}>
-        <Text style={s.klabel}>💬 Chat</Text>
-      </Pressable>
+          into ⌨. Tabs with no transcript (Shell, ssh) have no chat
+          to go back to, so the button stays off there. */}
+      {chatAvail !== false && (
+        <Pressable style={[s.kbtn, s.kwide]} onPress={toggleChat}>
+          <Text style={s.klabel}>💬 Chat</Text>
+        </Pressable>
+      )}
       <Pressable style={[s.kbtn, keysOpen && { borderColor: C.accent }]}
         onPress={() => setKeysOpen(!keysOpen)}>
         <Text style={[s.klabel, keysOpen && { color: C.accent }]}>⌨</Text>

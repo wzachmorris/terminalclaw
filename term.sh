@@ -40,6 +40,20 @@ menu() {
 }
 
 PROJ="${1:-}"
+
+# The built-in 🖥 Shell tab (server.py SHELL_ID): just a terminal in $HOME —
+# no registry entry, no CLAUDE.md, your own bashrc instead of agent.bashrc.
+# For "I only want a shell on this box" without inventing a project first.
+if [[ "$PROJ" == "_shell" ]]; then
+  tmux set -wg window-size latest 2>/dev/null || true
+  tmux set -g mouse on 2>/dev/null || true
+  clear
+  echo "🖥 Shell — plain terminal, no project"
+  echo "   tmux:   hub-_shell   (Ctrl-b d to detach)"
+  echo
+  exec tmux new-session -A -s "hub-_shell" -c "$HOME"
+fi
+
 # Only accept ids that exist in the registry; otherwise prompt.
 if [[ -n "$PROJ" ]]; then
   VALID="$(reg_field "$PROJ" id)"
