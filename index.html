@@ -389,7 +389,8 @@ function renderSidebar(){
     c.dataset.id=p.id;
     c.draggable=!TOUCH;                  // desktop: draggable to reorder; touch: off so taps register
     if(p.color) c.style.setProperty("--tag",p.color);
-    c.onclick=()=>selectProject(p.id);
+    // clicking the shell card you're already on opens another shell
+    c.onclick=()=>(p.builtin&&CURRENT===p.id)?openNewShell():selectProject(p.id);
     if(!TOUCH){                          // drag-to-reorder is desktop-only (touch drag blocked taps)
       c.addEventListener("dragstart",onDragStart);
       c.addEventListener("dragover",onDragOver);
@@ -399,8 +400,12 @@ function renderSidebar(){
     }
     const domains=(p.domains&&p.domains.length)?p.domains.join(", "):"<i>no public domain</i>";
     const dot=p.claude_running?'<span class="claude" title="Claude is running"></span>':'';
-    // the server's built-in 🖥 Shell tab can't be hidden/deleted/recolored
-    const actions=p.builtin?'':`<span class="card-actions">`+
+    // the server's built-in 🖥 Shell tabs can't be hidden/recolored; a
+    // numbered shell's 🗑 just ends its tmux session
+    const actions=p.builtin?(p.id==="_shell"?'':`<span class="card-actions">`+
+                `<button class="cact danger" title="Close this shell" `+
+                `onclick="event.stopPropagation();deleteProject('${p.id}')">🗑</button></span>`)
+              :`<span class="card-actions">`+
                 `<button class="cact" title="Hide project (keeps everything, just tucks it away)" `+
                 `onclick="event.stopPropagation();setHidden('${p.id}',true)">−</button>`+
                 `<button class="cact danger" title="Delete project tab (files on disk are NOT touched)" `+
@@ -409,7 +414,7 @@ function renderSidebar(){
                 `<button class="swatch ${p.color?'':'empty'}" title="Color tag" `+
                 `onclick="openPalette(event,'${p.id}')"></button>`;
     c.innerHTML=`<div class="card-top">${dot}<h3>${esc(p.name)}</h3>${actions}</div>`+
-                `<div class="domains">${p.builtin?'plain terminal, no project':domains}</div>`+
+                `<div class="domains">${p.builtin?(CURRENT===p.id?'plain terminal · click again for another':'plain terminal, no project'):domains}</div>`+
                 `<div class="pills">${p.builtin?'':pillsHtml(p)}</div>`;
     sb.appendChild(c);
   });
@@ -452,10 +457,20 @@ async function setHidden(id,hidden){
   }catch(e){ console.warn("hide failed",e); }
 }
 
+// built-in shells: _shell2, _shell3… — the next free number after what's listed
+function openNewShell(){
+  const n=Math.max(1,...PROJECTS.map(p=>{const m=/^_shell(\d+)?$/.exec(p.id);return m?parseInt(m[1]||"1",10):0;}))+1;
+  const id="_shell"+n;
+  if(!PROJECTS.some(p=>p.id===id))
+    PROJECTS.push({id,name:"🖥 Shell "+n,dir:"~",builtin:true,domains:[],containers:[],services:[],memory:[]});
+  selectProject(id);
+}
+
 async function deleteProject(id){
   const p=PROJECTS.find(x=>x.id===id);
   if(!p) return;
-  if(!confirm(`Delete the "${p.name}" project tab?\n\nFiles on disk are NOT touched — this only removes the tab and its tmux session. A registry backup is saved first.`)) return;
+  if(!confirm(p.builtin?`Close "${p.name}"? This ends its tmux session.`
+    :`Delete the "${p.name}" project tab?\n\nFiles on disk are NOT touched — this only removes the tab and its tmux session. A registry backup is saved first.`)) return;
   try{
     const r=await fetch("/api/project/delete",{method:"POST",headers:{"Content-Type":"application/json"},
       body:JSON.stringify({project:id})});

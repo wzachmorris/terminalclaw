@@ -249,11 +249,36 @@ export default function Workspace() {
     { msgs: ChatMsgT[]; since: string; avail: boolean | null;
       status?: ChatStatusT }>>({});
 
+  // built-in 🖥 Shell tabs: _shell is always listed; _shell2, _shell3… exist
+  // while their tmux session does. Opening one = selecting an id the server
+  // hasn't listed yet (term.sh creates the session on attach), so the list
+  // merge below keeps the current shell alive until the next poll sees it.
+  const projectIdRef = useRef(projectId);
+  projectIdRef.current = projectId;
+  const shellN = (id: string) => {
+    const m = /^_shell(\d+)?$/.exec(id);
+    return m ? parseInt(m[1] ?? '1', 10) : 0;
+  };
+  const shellProject = (id: string): Project => ({
+    id, name: `🖥 Shell${shellN(id) > 1 ? ` ${shellN(id)}` : ''}`, dir: '~', builtin: true,
+  });
+  const openNewShell = () => {
+    const n = Math.max(1, ...projects.map((p) => shellN(p.id))) + 1;
+    const id = `_shell${n}`;
+    setProjects((cur) => cur.some((p) => p.id === id) ? cur : [...cur, shellProject(id)]);
+    setStatus('connecting');
+    setProjectId(id);
+  };
+
   const loadProjects = useCallback(() => {
     if (!box) return Promise.resolve();
     const bid = box.id;
     return getProjects(box).then((d) => {
       if (!Array.isArray(d.projects)) return;   // gate page / odd server reply
+      const cur0 = projectIdRef.current;
+      if (cur0 && shellN(cur0) > 1 && !d.projects.some((p) => p.id === cur0)) {
+        d.projects = [...d.projects, shellProject(cur0)];
+      }
       projCache.current[bid] = d.projects;
       setProjects(d.projects);
       setProjectsRoot(d.projects_root ?? '');
@@ -694,7 +719,21 @@ export default function Workspace() {
     const b = box;
     const reload = () => void loadProjects();
     if (p.builtin) {
-      Alert.alert(p.name, 'Built-in: a plain terminal in the home directory, no project attached.');
+      // shells: open another, or end this one's tmux session (the numbered
+      // tab then disappears; _shell itself stays listed, just reset)
+      Alert.alert(p.name, 'A plain terminal in the home directory, no project attached.', [
+        { text: 'New shell', onPress: openNewShell },
+        {
+          text: shellN(p.id) > 1 ? 'Close this shell' : 'Reset this shell', style: 'destructive',
+          onPress: () => void deleteProject(b, p.id).then(() => {
+            if (p.id === projectId) { setStatus('connecting'); setProjectId('_shell'); }
+            if (shellN(p.id) > 1) setProjects((cur) => cur.filter((x) => x.id !== p.id));
+            else setWebNonce((n) => n + 1);
+            reload();
+          }).catch(() => {}),
+        },
+        { text: 'Cancel', style: 'cancel' },
+      ]);
       return;
     }
     Alert.alert(p.name, undefined, [
@@ -761,7 +800,11 @@ export default function Workspace() {
         p.id === projectId && s.pactive,
         p.hidden && { opacity: 0.5 },
       ]}
-      onPress={() => { setStatus('connecting'); setProjectId(p.id); }}
+      /* tapping the shell tab you're already on opens another shell */
+      onPress={() => {
+        if (p.builtin && p.id === projectId) { openNewShell(); return; }
+        setStatus('connecting'); setProjectId(p.id);
+      }}
       onLongPress={() => projectMenu(p)}
     >
       {p.claude_running && <View style={s.claude} />}

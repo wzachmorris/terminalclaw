@@ -490,7 +490,11 @@ def delete_project(pid):
     if not proj:
         raise ValueError("unknown project")
     if proj.get("builtin"):
-        raise ValueError("built-in tab")
+        # "Close shell": nothing in the registry — ending the tmux session is
+        # the whole operation (a numbered shell then drops off the list)
+        subprocess.run(["tmux", "kill-session", "-t", "hub-" + proj["id"]],
+                       check=False, timeout=5)
+        return proj["name"]
     stamp = time.strftime("%Y%m%d-%H%M%S")
     try:
         with open(f"{REGISTRY}.bak-pre-delete-{proj['id']}-{stamp}", "w", encoding="utf-8") as f:
@@ -507,27 +511,45 @@ def delete_project(pid):
 DOC_MAX = 512 * 1024   # cap on a single document tab's size, bytes
 
 
-# The built-in 🖥 Shell tab: a plain terminal in $HOME with no project around
-# it — no registry entry, no CLAUDE.md, no claude wrapper. Lives outside the
-# registry (a leading underscore can't come out of add_project's slugger, so
-# it can never collide) and is appended to every /api/projects reply; term.sh
-# special-cases the id. Key/paste/capture work through _find_project like any
-# tab; hide/move/delete refuse it; its `command` keeps chat mode off.
+# The built-in 🖥 Shell tabs: plain terminals in $HOME with no project around
+# them — no registry entry, no CLAUDE.md, no claude wrapper. Ids are _shell,
+# _shell2, _shell3… (a leading underscore can't come out of add_project's
+# slugger, so they never collide). _shell is always listed; the numbered ones
+# exist exactly as long as their tmux session does (open one by selecting the
+# id — term.sh creates the session; `exit` or "Close shell" ends it). Key/
+# paste/capture work through _find_project like any tab; hide/move/tabs/
+# memory refuse them; `command` keeps chat mode off.
 SHELL_ID = "_shell"
+_SHELL_RE = re.compile(r"^_shell([2-9]|[1-9]\d+)?$")   # no _shell1/_shell01 aliases
 
 
-def _shell_project():
+def _shell_project(pid=SHELL_ID):
+    n = _SHELL_RE.match(pid).group(1) or ""
     return {
-        "id": SHELL_ID, "name": "🖥 Shell", "dir": os.path.expanduser("~"),
-        "command": "bash", "builtin": True,
+        "id": pid, "name": "🖥 Shell" + (f" {n}" if n else ""),
+        "dir": os.path.expanduser("~"), "command": "bash", "builtin": True,
         "domains": [], "containers": [], "services": [], "memory": [],
     }
 
 
+def shell_ids():
+    """_shell plus every numbered shell with a live tmux session, in order."""
+    ids = {SHELL_ID}
+    try:
+        out = subprocess.run(["tmux", "list-sessions", "-F", "#{session_name}"],
+                             capture_output=True, text=True, timeout=5).stdout
+        for s in out.split():
+            if s.startswith("hub-") and _SHELL_RE.match(s[4:]):
+                ids.add(s[4:])
+    except Exception:
+        pass
+    return sorted(ids, key=lambda i: int(_SHELL_RE.match(i).group(1) or 1))
+
+
 def _find_project(reg, pid):
     p = next((p for p in reg.get("projects", []) if p.get("id") == pid), None)
-    if p is None and pid == SHELL_ID:
-        return _shell_project()
+    if p is None and _SHELL_RE.match(pid or ""):
+        return _shell_project(pid)
     return p
 
 
@@ -1713,12 +1735,13 @@ class Handler(BaseHTTPRequestHandler):
                 # agent has chosen to remember) — surfaced read/edit in the UI.
                 cmd = claude_mem_dir(p.get("dir", ""))
                 p["agent_memory"] = list_md(cmd) if cmd else []
-            # the built-in Shell tab rides along last, with the per-project
-            # extras pre-emptied so clients render it like any other card
-            reg["projects"].append({
-                **_shell_project(), "status": {}, "svc_status": {},
-                "claude_running": SHELL_ID in agents, "agent_memory": [],
-            })
+            # the built-in Shell tabs ride along last, with the per-project
+            # extras pre-emptied so clients render them like any other card
+            for sid in shell_ids():
+                reg["projects"].append({
+                    **_shell_project(sid), "status": {}, "svc_status": {},
+                    "claude_running": sid in agents, "agent_memory": [],
+                })
             reg["generated"] = True
             return self._send(200, reg)
 

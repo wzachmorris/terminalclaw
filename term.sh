@@ -41,17 +41,18 @@ menu() {
 
 PROJ="${1:-}"
 
-# The built-in 🖥 Shell tab (server.py SHELL_ID): just a terminal in $HOME —
-# no registry entry, no CLAUDE.md, your own bashrc instead of agent.bashrc.
-# For "I only want a shell on this box" without inventing a project first.
-if [[ "$PROJ" == "_shell" ]]; then
+# The built-in 🖥 Shell tabs (server.py SHELL_ID: _shell, _shell2, …): just a
+# terminal in $HOME — no registry entry, no CLAUDE.md, your own bashrc instead
+# of agent.bashrc. For "I only want a shell on this box" without inventing a
+# project first; a numbered one lives as long as its tmux session.
+if [[ "$PROJ" =~ ^_shell([2-9]|[1-9][0-9]+)?$ ]]; then
   tmux set -wg window-size latest 2>/dev/null || true
   tmux set -g mouse on 2>/dev/null || true
   clear
-  echo "🖥 Shell — plain terminal, no project"
-  echo "   tmux:   hub-_shell   (Ctrl-b d to detach)"
+  echo "🖥 Shell${BASH_REMATCH[1]:+ ${BASH_REMATCH[1]}} — plain terminal, no project"
+  echo "   tmux:   hub-${PROJ}   (Ctrl-b d to detach, 'exit' closes it)"
   echo
-  exec tmux new-session -A -s "hub-_shell" -c "$HOME"
+  exec tmux new-session -A -s "hub-${PROJ}" -c "$HOME"
 fi
 
 # Only accept ids that exist in the registry; otherwise prompt.
